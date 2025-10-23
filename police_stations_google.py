@@ -3,19 +3,16 @@ import requests
 import json
 import time
 
-st.set_page_config(page_title="Police Station JSON Generator (Google Maps)", layout="wide")
-st.title("🚓 Police Station JSON Generator (Google Maps API)")
+st.set_page_config(page_title="Police Station JSON Generator (OSM)", layout="wide")
+st.title("🚓 District-wise Police Stations (OpenStreetMap)")
 
 st.markdown("""
-This app generates **district-wise police station data in India** using Google Maps Places API.  
-You can download the results as a JSON file.
+This app automatically fetches **police stations for major districts in India** using OpenStreetMap (Overpass API).  
+No API key or file upload is required. You can download the results as a JSON file.
 """)
 
-# --- Input API Key ---
-api_key = st.text_input("Enter your Google Maps API Key:", type="password")
-
-# --- Optional: predefined district centers ---
-# For demonstration, we'll use a few districts with coordinates
+# --- Example districts with lat/lon bounding boxes (approx center) ---
+# For a full list, you can extend this dict
 DISTRICTS = {
     "Delhi": {"lat": 28.6139, "lon": 77.2090},
     "Mumbai": {"lat": 19.0760, "lon": 72.8777},
@@ -24,71 +21,74 @@ DISTRICTS = {
     "Chennai": {"lat": 13.0827, "lon": 80.2707}
 }
 
-# --- Helper function to query Google Places ---
-def get_police_stations(lat, lon, radius=20000, api_key=None):
-    stations = []
-    url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-    params = {
-        "location": f"{lat},{lon}",
-        "radius": radius,
-        "type": "police",
-        "key": api_key
-    }
-    while True:
-        res = requests.get(url, params=params)
-        if res.status_code != 200:
-            st.error(f"Error: {res.status_code}")
-            break
+# --- Helper function to query OSM Overpass API ---
+def get_police_stations(lat, lon, radius=20000):
+    """
+    Query OSM Overpass API to get police stations near (lat, lon) within radius (meters)
+    """
+    query = f"""
+    [out:json][timeout:60];
+    (
+      node["amenity"="police"](around:{radius},{lat},{lon});
+      way["amenity"="police"](around:{radius},{lat},{lon});
+      relation["amenity"="police"](around:{radius},{lat},{lon});
+    );
+    out center tags;
+    """
+    url = "https://overpass-api.de/api/interpreter"
+    try:
+        res = requests.post(url, data={"data": query}, timeout=120)
+        res.raise_for_status()
         data = res.json()
-        for place in data.get("results", []):
+        stations = []
+        for elem in data.get("elements", []):
+            tags = elem.get("tags", {})
+            name = tags.get("name") or "Police Station"
+            address_parts = []
+            for k in ["addr:street", "addr:suburb", "addr:city", "addr:state"]:
+                if k in tags and tags[k]:
+                    address_parts.append(tags[k])
+            address = ", ".join(address_parts)
+            lat_station, lon_station = None, None
+            if "lat" in elem:
+                lat_station, lon_station = elem["lat"], elem["lon"]
+            elif "center" in elem:
+                lat_station, lon_station = elem["center"]["lat"], elem["center"]["lon"]
             stations.append({
-                "name": place.get("name"),
-                "address": place.get("vicinity"),
-                "lat": place["geometry"]["location"]["lat"],
-                "lon": place["geometry"]["location"]["lng"],
-                "place_id": place.get("place_id")
+                "name": name,
+                "address": address,
+                "lat": lat_station,
+                "lon": lon_station
             })
-        # Check if there is a next page
-        if "next_page_token" in data:
-            next_token = data["next_page_token"]
-            time.sleep(2)  # required delay for next_page_token
-            params["pagetoken"] = next_token
-        else:
-            break
-    return stations
+        return stations
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return []
 
 # --- Main button ---
 if st.button("🔍 Generate Police Stations JSON"):
-    if not api_key:
-        st.warning("Please enter your Google Maps API key!")
-    else:
-        results = {}
-        progress = st.progress(0)
-        total = len(DISTRICTS)
+    results = {}
+    progress = st.progress(0)
+    total = len(DISTRICTS)
 
-        for i, (district, coords) in enumerate(DISTRICTS.items(), 1):
-            lat, lon = coords["lat"], coords["lon"]
-            st.info(f"Fetching police stations for {district}...")
-            try:
-                stations = get_police_stations(lat, lon, api_key=api_key)
-                results[district.lower()] = stations
-            except Exception as e:
-                st.error(f"Error fetching {district}: {e}")
-                results[district.lower()] = []
-            progress.progress(i / total)
-            time.sleep(1)  # polite delay
+    for i, (district, coords) in enumerate(DISTRICTS.items(), 1):
+        st.info(f"Fetching police stations for {district}...")
+        stations = get_police_stations(coords["lat"], coords["lon"])
+        results[district.lower()] = stations
+        progress.progress(i / total)
+        time.sleep(1)  # polite delay
 
-        st.success(f"✅ Completed! Fetched data for {len(results)} districts.")
+    st.success(f"✅ Completed! Fetched data for {len(results)} districts.")
 
-        # Download JSON
-        json_bytes = io.BytesIO(json.dumps(results, ensure_ascii=False, indent=2).encode("utf-8"))
-        st.download_button(
-            "⬇️ Download police_stations.json",
-            data=json_bytes,
-            file_name="police_stations.json",
-            mime="application/json"
-        )
+    # Download JSON
+    json_bytes = json.dumps(results, ensure_ascii=False, indent=2).encode("utf-8")
+    st.download_button(
+        "⬇️ Download police_stations.json",
+        data=json_bytes,
+        file_name="police_stations.json",
+        mime="application/json"
+    )
 
-        # Preview first district
-        first_district = list(results.keys())[0]
-        st.json({first_district: results[first_district][:5]})  # preview first 5 stations
+    # Preview first district
+    first_district = list(results.keys())[0]
+    st.json({first_district: results[first_district][:5]})  # first 5 stations
