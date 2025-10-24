@@ -1,81 +1,74 @@
+# police_stations_app.py
 import streamlit as st
-import requests
+import pandas as pd
 import json
-from time import sleep
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut
+import requests
+import time
 
-# Dictionary of states and districts (abbreviated example; replace with full)
-INDIA_REGIONS = {
-    "Andhra Pradesh": ["Anantapur", "Chittoor", "East Godavari", "Guntur", "Krishna"],
-    "Maharashtra": ["Mumbai", "Pune", "Chandrapur"],
-    # Add all other states/districts here...
+# Dictionary of Indian states and districts
+INDIA_DISTRICTS = {
+    "Andhra Pradesh": ["Anantapur", "Chittoor", "East Godavari", "Guntur", "Krishna", "Kurnool", "Nellore", "Prakasam", "Srikakulam", "Visakhapatnam", "Vizianagaram", "West Godavari", "Kadapa"],
+    "Maharashtra": ["Mumbai", "Pune", "Chandrapur"]
+    # Add other states/districts here
 }
 
-# Function to fetch one police station per district
-def fetch_one_police_station(state: str, district: str):
+# Function to query Overpass API
+def fetch_police_station(district, state):
     query = f"""
-    [out:json][timeout:20];
-    area["name"="{district}"]["boundary"="administrative"]->.a;
-    (
-      node["amenity"="police"](area.a);
-      way["amenity"="police"](area.a);
-      relation["amenity"="police"](area.a);
-    );
-    out center 1;
+    [out:json][timeout:25];
+    area["name"="{state}"]->.searchArea;
+    node["amenity"="police"](area.searchArea)["name"];
+    out center;
     """
+    url = "https://overpass-api.de/api/interpreter"
     try:
-        r = requests.post("https://overpass-api.de/api/interpreter", data={"data": query}, timeout=20)
-        r.raise_for_status()
-        data = r.json()
-        elems = data.get("elements", [])
-        if not elems:
+        response = requests.get(url, params={'data': query})
+        data = response.json()
+        # Filter nodes that contain the district name in address
+        for el in data.get('elements', []):
+            tags = el.get('tags', {})
+            if district.lower() in tags.get('addr:district', '').lower() or district.lower() in tags.get('name', '').lower():
+                return {
+                    "name": tags.get("name", "Police Station"),
+                    "district": district,
+                    "state": state,
+                    "address": tags.get("addr:full", tags.get("addr:street", f"{district}, {state}")),
+                    "phone": tags.get("phone", "Not available"),
+                    "latitude": el.get("lat"),
+                    "longitude": el.get("lon")
+                }
+        # Fallback: return first available node in state
+        if data.get('elements'):
+            el = data['elements'][0]
+            tags = el.get('tags', {})
+            return {
+                "name": tags.get("name", "Police Station"),
+                "district": district,
+                "state": state,
+                "address": tags.get("addr:full", tags.get("addr:street", f"{district}, {state}")),
+                "phone": tags.get("phone", "Not available"),
+                "latitude": el.get("lat"),
+                "longitude": el.get("lon")
+            }
+    except Exception as e:
+        print(f"Error fetching for {district}, {state}: {e}")
+    # Final fallback: geocode district center
+    try:
+        geolocator = Nominatim(user_agent="police_app")
+        location = geolocator.geocode(f"{district}, {state}, India", timeout=10)
+        if location:
             return {
                 "name": "Police Station",
                 "district": district,
                 "state": state,
                 "address": f"{district}, {state}",
                 "phone": "Not available",
-                "latitude": None,
-                "longitude": None
+                "latitude": location.latitude,
+                "longitude": location.longitude
             }
-        el = elems[0]
-        tags = el.get("tags", {})
-
-        # Name
-        name = tags.get("name") or "Unnamed Police Station"
-
-        # Phone
-        phone = (
-            tags.get("phone") or 
-            tags.get("contact:phone") or
-            tags.get("contact:mobile") or
-            tags.get("contact:fax") or
-            "Not available"
-        )
-
-        # Address
-        addr_parts = []
-        for key in ["addr:housename", "addr:housenumber", "addr:street", "addr:place",
-                    "addr:city", "addr:suburb", "addr:district", "addr:state", "addr:postcode"]:
-            if tags.get(key):
-                addr_parts.append(tags[key])
-        address = ", ".join(addr_parts)
-        if not address:
-            address = f"{district}, {state}"  # fallback
-
-        # Coordinates
-        lat = el.get("lat") or el.get("center", {}).get("lat")
-        lon = el.get("lon") or el.get("center", {}).get("lon")
-
-        return {
-            "name": name,
-            "district": district,
-            "state": state,
-            "address": address,
-            "phone": phone,
-            "latitude": round(lat,6) if lat else None,
-            "longitude": round(lon,6) if lon else None
-        }
-    except Exception:
+    except GeocoderTimedOut:
         return {
             "name": "Police Station",
             "district": district,
@@ -88,26 +81,34 @@ def fetch_one_police_station(state: str, district: str):
 
 # Streamlit UI
 st.title("Indian Police Stations by District")
-st.write("This app fetches at least one police station per district from OpenStreetMap.")
 
 if st.button("Fetch Police Stations"):
-    all_data = []
+    all_stations = []
     progress_text = "Fetching police stations..."
     my_bar = st.progress(0, text=progress_text)
-    total_districts = sum(len(d) for d in INDIA_REGIONS.values())
+    total = sum(len(d) for d in INDIA_DISTRICTS.values())
     count = 0
-
-    for state, districts in INDIA_REGIONS.items():
+    for state, districts in INDIA_DISTRICTS.items():
         for district in districts:
-            station = fetch_one_police_station(state, district)
-            all_data.append(station)
+            station = fetch_police_station(district, state)
+            all_stations.append(station)
             count += 1
-            my_bar.progress(count/total_districts)
-            sleep(0.5)  # avoid overloading Overpass API
+            my_bar.progress(count / total, text=f"Processing {district}, {state}")
+            time.sleep(0.1)  # small delay to avoid hitting API limits
 
-    st.success(f"Fetched police stations for {count} districts!")
-    st.dataframe(all_data)
+    st.success("Fetched all police stations!")
 
-    # JSON download
-    json_data = json.dumps(all_data, indent=2)
-    st.download_button("Download JSON", data=json_data, file_name="police_stations.json")
+    # Convert to DataFrame
+    df = pd.DataFrame(all_stations)
+    st.dataframe(df)
+
+    # Save JSON
+    with open("police_stations.json", "w", encoding="utf-8") as f:
+        json.dump(all_stations, f, ensure_ascii=False, indent=4)
+
+    st.download_button(
+        label="Download JSON",
+        data=json.dumps(all_stations, ensure_ascii=False, indent=4),
+        file_name="police_stations.json",
+        mime="application/json"
+    )
