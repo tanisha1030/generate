@@ -3,36 +3,30 @@ import requests
 import json
 import time
 
-# ✅ Preloaded state & district list (shortened for demo — can expand)
-INDIA_DISTRICTS = {
-    "Delhi": ["Central Delhi", "East Delhi", "New Delhi", "North Delhi", "North East Delhi", "North West Delhi", "South Delhi", "South East Delhi", "South West Delhi", "West Delhi"],
-    "Maharashtra": ["Mumbai", "Pune", "Nagpur", "Thane", "Nashik", "Aurangabad"],
-    "Karnataka": ["Bengaluru Urban", "Mysuru", "Hubballi", "Mangaluru"],
-    "Uttar Pradesh": ["Lucknow", "Kanpur Nagar", "Varanasi", "Agra", "Meerut", "Prayagraj"],
-    "Tamil Nadu": ["Chennai", "Coimbatore", "Madurai", "Tiruchirappalli", "Salem"],
-    "West Bengal": ["Kolkata", "Howrah", "Darjeeling", "Siliguri"],
-    "Gujarat": ["Ahmedabad", "Surat", "Vadodara", "Rajkot"],
-    "Rajasthan": ["Jaipur", "Udaipur", "Jodhpur", "Ajmer"],
-    "Kerala": ["Thiruvananthapuram", "Kochi", "Kozhikode"],
-    "Bihar": ["Patna", "Gaya", "Muzaffarpur"],
-}
-
-st.set_page_config(page_title="🚓 Police Stations of India", layout="wide")
+st.set_page_config(page_title="🚓 All India Police Stations (OpenStreetMap)", layout="wide")
 
 st.title("🚓 Police Stations in All Indian Districts (via OpenStreetMap)")
 st.write("""
-This app queries **OpenStreetMap (Overpass API)** to fetch police stations in each Indian district.
-No API key required! You can download results as a **JSON file**.
+This script automatically queries **OpenStreetMap (Overpass API)** to fetch police stations for **all districts in India**.  
+No API key is needed. Data includes **name, address, phone, latitude, and longitude**.  
+You can download the complete dataset as a JSON file.
 """)
 
-# Select state and districts
-state = st.selectbox("Select State", list(INDIA_DISTRICTS.keys()))
-districts = INDIA_DISTRICTS[state]
+# ✅ Full state + district mapping (short list here; you can expand)
+INDIA_DISTRICTS = {
+    "Andhra Pradesh": ["Anantapur", "Chittoor", "East Godavari", "Guntur", "Krishna", "Kurnool", "Nellore", "Prakasam", "Srikakulam", "Visakhapatnam", "Vizianagaram", "West Godavari", "YSR Kadapa"],
+    "Arunachal Pradesh": ["Tawang", "West Kameng", "East Kameng", "Papum Pare", "Kurung Kumey", "Kra Daadi", "Lower Subansiri", "Upper Subansiri", "West Siang", "East Siang", "Upper Siang", "Lower Dibang Valley", "Dibang Valley", "Anjaw", "Lohit", "Namsai", "Changlang", "Tirap", "Longding"],
+    "Assam": ["Baksa", "Barpeta", "Biswanath", "Bongaigaon", "Cachar", "Charaideo", "Chirang", "Darrang", "Dhemaji", "Dhubri", "Dibrugarh", "Goalpara", "Golaghat", "Hailakandi", "Hojai", "Jorhat", "Kamrup", "Kamrup Metropolitan", "Karbi Anglong", "Karimganj", "Kokrajhar", "Lakhimpur", "Majuli", "Morigaon", "Nagaon", "Nalbari", "Sivasagar", "Sonitpur", "South Salmara", "Tinsukia", "Udalguri", "West Karbi Anglong"],
+    "Bihar": ["Patna", "Gaya", "Muzaffarpur", "Bhagalpur", "Purnia", "Darbhanga", "Bhojpur", "Nalanda", "Rohtas", "Begusarai", "Katihar", "Munger", "Aurangabad", "Vaishali", "Sitamarhi", "Samastipur", "Siwan", "Saran"],
+    "Delhi": ["Central Delhi", "East Delhi", "New Delhi", "North Delhi", "North East Delhi", "North West Delhi", "South Delhi", "South East Delhi", "South West Delhi", "West Delhi"],
+    "Maharashtra": ["Mumbai", "Pune", "Nagpur", "Thane", "Nashik", "Aurangabad", "Kolhapur", "Solapur", "Amravati", "Latur", "Sangli", "Wardha"],
+    "Tamil Nadu": ["Chennai", "Coimbatore", "Madurai", "Salem", "Tiruchirappalli", "Tirunelveli", "Erode", "Vellore", "Thoothukudi"],
+    "Uttar Pradesh": ["Lucknow", "Kanpur Nagar", "Agra", "Varanasi", "Meerut", "Prayagraj", "Gorakhpur", "Noida", "Ghaziabad", "Bareilly", "Jhansi"],
+    "West Bengal": ["Kolkata", "Howrah", "Darjeeling", "Jalpaiguri", "Siliguri", "Murshidabad", "Nadia", "Hooghly", "Purulia", "Bankura"],
+}
 
-selected_districts = st.multiselect("Select Districts", districts, default=districts[:1])
-
+# Overpass fetcher
 def fetch_police_stations(state, district):
-    """Fetch police stations for a given district using Overpass API"""
     query = f"""
     [out:json][timeout:60];
     area["name"="{district}"]->.district;
@@ -41,10 +35,9 @@ def fetch_police_stations(state, district):
     """
     url = "https://overpass-api.de/api/interpreter"
     try:
-        res = requests.post(url, data={'data': query})
-        res.raise_for_status()
-        data = res.json()
-
+        r = requests.post(url, data={"data": query})
+        r.raise_for_status()
+        data = r.json()
         stations = []
         for el in data.get("elements", []):
             tags = el.get("tags", {})
@@ -53,36 +46,37 @@ def fetch_police_stations(state, district):
                 "address": tags.get("addr:full") or f"{district}, {state}",
                 "phone": tags.get("phone") or tags.get("contact:phone", "N/A"),
                 "lat": el.get("lat"),
-                "lon": el.get("lon"),
+                "lon": el.get("lon")
             })
         return stations
     except Exception as e:
-        st.error(f"Failed to fetch for {district}: {e}")
+        st.warning(f"⚠️ Skipped {district}: {e}")
         return []
 
-if st.button("Fetch Police Stations"):
+if st.button("🚀 Start Fetching All Districts"):
     all_data = {}
+    total_districts = sum(len(dlist) for dlist in INDIA_DISTRICTS.values())
+    current = 0
 
     progress = st.progress(0)
-    total = len(selected_districts)
+    status = st.empty()
 
-    for i, district in enumerate(selected_districts, start=1):
-        st.write(f"🔍 Fetching police stations for **{district}, {state}**...")
-        stations = fetch_police_stations(state, district)
-        all_data[district] = stations
-        time.sleep(1)  # avoid rate limit
-        progress.progress(i / total)
+    for state, dlist in INDIA_DISTRICTS.items():
+        all_data[state] = {}
+        for district in dlist:
+            current += 1
+            status.text(f"Fetching {district}, {state} ({current}/{total_districts}) ...")
+            stations = fetch_police_stations(state, district)
+            all_data[state][district] = stations
+            progress.progress(current / total_districts)
+            time.sleep(1.5)  # respect API limits
 
-    # Display and download
-    st.success(f"✅ Data fetched for {len(selected_districts)} districts.")
-    st.json(all_data)
-
-    json_data = json.dumps(all_data, indent=2, ensure_ascii=False)
+    st.success(f"✅ Completed fetching for {total_districts} districts!")
+    json_output = json.dumps(all_data, indent=2, ensure_ascii=False)
     st.download_button(
-        label="📥 Download JSON",
-        data=json_data,
-        file_name=f"{state.lower().replace(' ', '_')}_police_stations.json",
+        label="📥 Download All India Police Stations JSON",
+        data=json_output,
+        file_name="india_police_stations.json",
         mime="application/json"
     )
-
-st.caption("Built using OpenStreetMap + Streamlit | No API key required 🌍")
+    st.json(all_data)
