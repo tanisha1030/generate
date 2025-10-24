@@ -1,25 +1,19 @@
 import streamlit as st
+import re
 import requests
-import json
 import time
+from typing import Dict, List, Tuple, Optional
+import pandas as pd
+import json
 
-st.set_page_config(page_title="🚓 All India Police Stations (Capitals Only)", layout="wide")
-
-st.title("🚓 Police Stations in State & UT Capitals (via OpenStreetMap)")
-st.write("""
-This script fetches **police stations** only for **state and union territory capitals** in India via **OpenStreetMap (Overpass API)**.  
-No API key is needed. Data includes **name, address, phone, latitude, and longitude**.  
-You can download the dataset as a JSON file.
-""")
-
-# ✅ State & UT capitals
-CAPITALS = {
+# India Districts Dictionary
+INDIA_DISTRICTS = {
     "Andhra Pradesh": ["Alluri Sitharama Raju", "Anakapalli", "Anantapur", "Annamayya", "Bapatla", "Chittoor", "Dr. B.R. Ambedkar Konaseema", "East Godavari", "Eluru", "Guntur", "Kakinada", "Krishna", "Kurnool", "Nandyal", "NTR", "Palnadu", "Parvathipuram Manyam", "Prakasam", "Sri Potti Sriramulu Nellore", "Sri Sathya Sai", "Srikakulam", "Tirupati", "Visakhapatnam", "Vizianagaram", "West Godavari", "YSR Kadapa"],
     "Arunachal Pradesh": ["Anjaw", "Changlang", "Dibang Valley", "East Kameng", "East Siang", "Kamle", "Kra Daadi", "Kurung Kumey", "Lepa Rada", "Lohit", "Longding", "Lower Dibang Valley", "Lower Siang", "Lower Subansiri", "Namsai", "Pakke Kessang", "Papum Pare", "Shi Yomi", "Siang", "Tawang", "Tirap", "Upper Siang", "Upper Subansiri", "West Kameng", "West Siang", "Bichom", "Keyi Panyor"],
     "Assam": ["Bajali", "Baksa", "Barpeta", "Biswanath", "Bongaigaon", "Cachar", "Charaideo", "Chirang", "Darrang", "Dhemaji", "Dhubri", "Dima Hasao", "Dibrugarh", "Goalpara", "Golaghat", "Hailakandi", "Hojai", "Jorhat", "Kamrup", "Kamrup Metropolitan", "Karbi Anglong", "Karimganj", "Kokrajhar", "Lakhimpur", "Majuli", "Morigaon", "Nagaon", "Nalbari", "Sivasagar", "Sonitpur", "South Salmara-Mankachar", "Tinsukia", "Udalguri", "West Karbi Anglong"],
     "Bihar": ["Araria", "Arwal", "Aurangabad", "Banka", "Begusarai", "Bhagalpur", "Bhojpur", "Buxar", "Darbhanga", "East Champaran", "Gaya", "Gopalganj", "Jamui", "Jehanabad", "Kaimur", "Katihar", "Khagaria", "Kishanganj", "Lakhisarai", "Madhepura", "Madhubani", "Munger", "Muzaffarpur", "Nalanda", "Nawada", "Patna", "Purnia", "Rohtas", "Saharsa", "Samastipur", "Saran", "Sheikhpura", "Sheohar", "Sitamarhi", "Siwan", "Supaul", "Vaishali", "West Champaran"],
-    "Chhattisgarh": ["Balod", "Baloda Bazar", "Balrampur", "Bastar", "Bemetara", "Bijapur", "Bilaspur", "Dantewada", "Dhamtari", "Durg", "Gariaband", "Gaurela-Pendra-Marwahi", "Janjgir-Champa", "Jashpur", "Kabirdham", "Kanker", "Kondagaon", "Korba", "Koriya", "Mahasamund", "Manendragarh-Chirmiri-Bharatpur", "Mohla-Manpur-Ambagarh Chowki", "Mungeli", "Narayanpur", "Raigarh", "Raipur", "Rajnandgaon", "Sakti", "Sarangarh-Bilaigarh", "Sukma", "Surajpur", "Surguja", "Khairagarh-Chhuikhadan-Gandai", "Bastar"],
-    "Goa": ["Panaji","North Goa", "South Goa"],
+    "Chhattisgarh": ["Balod", "Baloda Bazar", "Balrampur", "Bastar", "Bemetara", "Bijapur", "Bilaspur", "Dantewada", "Dhamtari", "Durg", "Gariaband", "Gaurela-Pendra-Marwahi", "Janjgir-Champa", "Jashpur", "Kabirdham", "Kanker", "Kondagaon", "Korba", "Koriya", "Mahasamund", "Manendragarh-Chirmiri-Bharatpur", "Mohla-Manpur-Ambagarh Chowki", "Mungeli", "Narayanpur", "Raigarh", "Raipur", "Rajnandgaon", "Sakti", "Sarangarh-Bilaigarh", "Sukma", "Surajpur", "Surguja", "Khairagarh-Chhuikhadan-Gandai"],
+    "Goa": ["North Goa", "South Goa"],
     "Gujarat": ["Ahmedabad", "Amreli", "Anand", "Aravalli", "Banaskantha", "Bharuch", "Bhavnagar", "Botad", "Chhota Udaipur", "Dahod", "Devbhoomi Dwarka", "Gandhinagar", "Gir Somnath", "Jamnagar", "Junagadh", "Kheda", "Kutch", "Mahisagar", "Mehsana", "Morbi", "Narmada", "Navsari", "Panchmahal", "Patan", "Porbandar", "Rajkot", "Sabarkantha", "Surat", "Surendranagar", "Tapi", "Vadodara", "Valsad"],
     "Haryana": ["Ambala", "Bhiwani", "Charkhi Dadri", "Faridabad", "Fatehabad", "Gurugram", "Hisar", "Jhajjar", "Jind", "Kaithal", "Karnal", "Kurukshetra", "Mahendragarh", "Nuh", "Palwal", "Panchkula", "Panipat", "Rewari", "Rohtak", "Sirsa", "Sonipat", "Yamunanagar"],
     "Himachal Pradesh": ["Bilaspur", "Chamba", "Hamirpur", "Kangra", "Kinnaur", "Kullu", "Lahaul-Spiti", "Mandi", "Shimla", "Sirmaur", "Solan", "Una"],
@@ -48,81 +42,478 @@ CAPITALS = {
     "Delhi": ["Central Delhi", "East Delhi", "New Delhi", "North Delhi", "North East Delhi", "North West Delhi", "Shahdara", "South Delhi", "South East Delhi", "South West Delhi", "West Delhi"],
     "Jammu and Kashmir": ["Anantnag", "Bandipora", "Baramulla", "Budgam", "Doda", "Ganderbal", "Jammu", "Kathua", "Kishtwar", "Kulgam", "Kupwara", "Poonch", "Pulwama", "Rajouri", "Ramban", "Reasi", "Samba", "Shopian", "Srinagar", "Udhampur"],
     "Ladakh": ["Kargil", "Leh"],
-    "Puducherry": ["Karaikal", "Mahe", "Puducherry", "Yanam"],
-    "Lakshadweep": ["Agatti", "Amini", "Andrott", "Kadmath", "Kavaratti", "Minicoy", "Chetlat", "Bitra"]
+    "Lakshadweep": ["Lakshadweep"],
+    "Puducherry": ["Karaikal", "Mahe", "Puducherry", "Yanam"]
 }
 
-
-
-# Overpass fetcher (fixed)
-def fetch_police_stations(state, city):
-    query = f"""
-    [out:json][timeout:60];
-    area["name"="{city}"]->.city;
-    node(area.city)["amenity"="police"];
-    out body;
-    """
-    url = "https://overpass-api.de/api/interpreter"
+def geocode_with_nominatim(query: str) -> Optional[Dict]:
+    """Geocode address using OpenStreetMap Nominatim API"""
+    base_url = "https://nominatim.openstreetmap.org/search"
+    
+    params = {
+        'q': query,
+        'format': 'json',
+        'limit': 1,
+        'countrycodes': 'in',
+        'addressdetails': 1
+    }
+    
+    headers = {
+        'User-Agent': 'AddressExtractorApp/1.0'
+    }
+    
     try:
-        r = requests.post(url, data={"data": query})
-        r.raise_for_status()
-        data = r.json()
-        stations = []
-        for el in data.get("elements", []):
-            tags = el.get("tags", {})
-
-            # Build address from available tags
-            address_parts = [
-                tags.get("addr:housenumber"),
-                tags.get("addr:street"),
-                tags.get("addr:suburb"),
-                tags.get("addr:city") or city,
-                tags.get("addr:state") or state,
-                tags.get("addr:postcode")
-            ]
-            address = ", ".join([part for part in address_parts if part]) or f"{city}, {state}"
-
-            # Phone handling
-            phone = tags.get("phone") or tags.get("contact:phone") or tags.get("contact:mobile") or "N/A"
-
-            stations.append({
-                "name": tags.get("name", "Unknown"),
-                "address": address,
-                "phone": phone,
-                "lat": el.get("lat"),
-                "lon": el.get("lon")
-            })
-        return stations
+        response = requests.get(base_url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        results = response.json()
+        
+        if results:
+            result = results[0]
+            return {
+                'latitude': float(result['lat']),
+                'longitude': float(result['lon']),
+                'display_name': result['display_name'],
+                'address': result.get('address', {})
+            }
     except Exception as e:
-        st.warning(f"⚠️ Skipped {city}: {e}")
-        return []
+        return None
+    
+    return None
 
-if st.button("🚀 Fetch All Capitals"):
+def fetch_all_districts_data():
+    """Fetch geocoding data for all districts"""
     all_data = {}
-    total_cities = sum(len(clist) for clist in CAPITALS.values())
+    total_districts = sum(len(districts) for districts in INDIA_DISTRICTS.values())
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     current = 0
-
-    progress = st.progress(0)
-    status = st.empty()
-
-    for state, clist in CAPITALS.items():
+    
+    for state, districts in INDIA_DISTRICTS.items():
         all_data[state] = {}
-        for city in clist:
+        
+        for district in districts:
             current += 1
-            status.text(f"Fetching {city}, {state} ({current}/{total_cities}) ...")
-            stations = fetch_police_stations(state, city)
-            all_data[state][city] = stations
-            progress.progress(current / total_cities)
-            time.sleep(1.5)  # Respect API limits
+            status_text.text(f"Processing: {district}, {state} ({current}/{total_districts})")
+            
+            # Create search query
+            search_query = f"{district}, {state}, India"
+            
+            # Geocode
+            location_data = geocode_with_nominatim(search_query)
+            
+            if location_data:
+                all_data[state][district] = {
+                    "district": district,
+                    "state": state,
+                    "latitude": location_data['latitude'],
+                    "longitude": location_data['longitude'],
+                    "display_name": location_data['display_name'],
+                    "address": location_data['address']
+                }
+            else:
+                all_data[state][district] = {
+                    "district": district,
+                    "state": state,
+                    "latitude": None,
+                    "longitude": None,
+                    "display_name": None,
+                    "address": None,
+                    "error": "Geocoding failed"
+                }
+            
+            progress_bar.progress(current / total_districts)
+            time.sleep(1.5)  # Rate limiting for Nominatim API
+    
+    status_text.text("✅ Processing complete!")
+    return all_data
 
-    st.success(f"✅ Completed fetching for {total_cities} capitals!")
+def extract_phone_numbers(text: str) -> List[str]:
+    """Extract Indian phone numbers from text"""
+    patterns = [
+        r'\+91[-\s]?\d{10}',
+        r'\b\d{10}\b',
+        r'\b\d{5}[-\s]?\d{5}\b',
+        r'\b\d{3}[-\s]?\d{3}[-\s]?\d{4}\b',
+    ]
+    
+    phone_numbers = []
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        phone_numbers.extend(matches)
+    
+    cleaned = []
+    for num in phone_numbers:
+        cleaned_num = re.sub(r'[-\s]', '', num)
+        if len(cleaned_num) == 10 or (len(cleaned_num) == 12 and cleaned_num.startswith('91')):
+            if cleaned_num not in cleaned:
+                cleaned.append(cleaned_num)
+    
+    return cleaned
 
-    json_output = json.dumps(all_data, indent=2, ensure_ascii=False)
-    st.download_button(
-        label="📥 Download JSON of Capitals Police Stations",
-        data=json_output,
-        file_name="india_capitals_police_stations.json",
-        mime="application/json"
+def extract_pincode(text: str) -> Optional[str]:
+    """Extract Indian pincode from text"""
+    pincode_pattern = r'\b[1-9]\d{5}\b'
+    matches = re.findall(pincode_pattern, text)
+    return matches[0] if matches else None
+
+def find_district_and_state(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """Find district and state from text using the districts dictionary"""
+    text_lower = text.lower()
+    
+    for state, districts in INDIA_DISTRICTS.items():
+        if state.lower() in text_lower:
+            for district in districts:
+                if district.lower() in text_lower:
+                    return district, state
+            return None, state
+        
+        for district in districts:
+            if district.lower() in text_lower:
+                return district, state
+    
+    return None, None
+
+def extract_address_components(text: str) -> Dict:
+    """Extract all address components from text"""
+    district, state = find_district_and_state(text)
+    phone_numbers = extract_phone_numbers(text)
+    pincode = extract_pincode(text)
+    
+    location_data = None
+    if district and state:
+        search_query = f"{district}, {state}, India"
+        time.sleep(1)
+        location_data = geocode_with_nominatim(search_query)
+    elif state:
+        search_query = f"{state}, India"
+        time.sleep(1)
+        location_data = geocode_with_nominatim(search_query)
+    
+    return {
+        'district': district,
+        'state': state,
+        'pincode': pincode,
+        'phone_numbers': phone_numbers,
+        'location_data': location_data
+    }
+
+# Streamlit UI
+st.set_page_config(page_title="Address & Location Extractor", page_icon="📍", layout="wide")
+
+st.title("📍 Address & Location Extractor")
+st.markdown("Extract address details, phone numbers, and coordinates using OpenStreetMap")
+
+# Tabs for different functionalities
+tab1, tab2, tab3 = st.tabs(["📝 Text Input", "📊 Bulk Processing", "🗺️ Generate All Districts Data"])
+
+with tab1:
+    st.subheader("Enter Text to Extract Information")
+    
+    text_input = st.text_area(
+        "Paste address or text containing location information:",
+        height=150,
+        placeholder="Example: Office located at MG Road, Bangalore, Karnataka 560001. Contact: 9876543210"
     )
+    
+    if st.button("Extract Information", type="primary", key="extract_single"):
+        if text_input.strip():
+            with st.spinner("Extracting information..."):
+                result = extract_address_components(text_input)
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("📄 Extracted Information")
+                    
+                    if result['state']:
+                        st.success(f"**State:** {result['state']}")
+                    else:
+                        st.warning("State not found")
+                    
+                    if result['district']:
+                        st.success(f"**District:** {result['district']}")
+                    else:
+                        st.warning("District not found")
+                    
+                    if result['pincode']:
+                        st.success(f"**Pincode:** {result['pincode']}")
+                    else:
+                        st.info("Pincode not found")
+                    
+                    if result['phone_numbers']:
+                        st.success(f"**Phone Numbers:** {', '.join(result['phone_numbers'])}")
+                    else:
+                        st.info("No phone numbers found")
+                
+                with col2:
+                    st.subheader("🗺️ Location Data")
+                    
+                    if result['location_data']:
+                        loc = result['location_data']
+                        st.success(f"**Latitude:** {loc['latitude']}")
+                        st.success(f"**Longitude:** {loc['longitude']}")
+                        st.info(f"**Full Address:** {loc['display_name']}")
+                        
+                        df_map = pd.DataFrame({
+                            'lat': [loc['latitude']],
+                            'lon': [loc['longitude']]
+                        })
+                        st.map(df_map, zoom=12)
+                        
+                        osm_link = f"https://www.openstreetmap.org/?mlat={loc['latitude']}&mlon={loc['longitude']}&zoom=15"
+                        st.markdown(f"[📍 View on OpenStreetMap]({osm_link})")
+                    else:
+                        st.warning("Could not geocode the location.")
+        else:
+            st.warning("Please enter some text.")
 
-    st.json(all_data)
+with tab2:
+    st.subheader("Bulk Processing from CSV")
+    st.info("Upload a CSV file with a column containing addresses or text.")
+    
+    uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
+    
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        st.write("Preview of uploaded data:")
+        st.dataframe(df.head())
+        
+        columns = df.columns.tolist()
+        text_column = st.selectbox("Select the column containing address/text:", columns)
+        
+        if st.button("Process All Rows", type="primary", key="process_bulk"):
+            results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for idx, row in df.iterrows():
+                status_text.text(f"Processing row {idx + 1} of {len(df)}...")
+                text = str(row[text_column])
+                
+                extracted = extract_address_components(text)
+                
+                result_row = {
+                    'Original_Text': text,
+                    'State': extracted['state'],
+                    'District': extracted['district'],
+                    'Pincode': extracted['pincode'],
+                    'Phone_Numbers': ', '.join(extracted['phone_numbers']) if extracted['phone_numbers'] else None,
+                    'Latitude': extracted['location_data']['latitude'] if extracted['location_data'] else None,
+                    'Longitude': extracted['location_data']['longitude'] if extracted['location_data'] else None,
+                    'Full_Address': extracted['location_data']['display_name'] if extracted['location_data'] else None
+                }
+                results.append(result_row)
+                
+                progress_bar.progress((idx + 1) / len(df))
+                time.sleep(1.5)
+            
+            status_text.text("Processing complete!")
+            
+            results_df = pd.DataFrame(results)
+            st.success(f"Processed {len(results)} rows successfully!")
+            st.dataframe(results_df)
+            
+            csv = results_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Results as CSV",
+                data=csv,
+                file_name="extracted_addresses.csv",
+                mime="text/csv"
+            )
+
+with tab3:
+    st.subheader("Generate Complete Districts Database")
+    st.info("""
+    This will fetch latitude, longitude, and address information for all 787+ districts in India.
+    
+    ⚠️ **Important Notes:**
+    - This process will take approximately **20-30 minutes** due to API rate limits
+    - It will make ~787 API requests to OpenStreetMap Nominatim
+    - Please be patient and do not refresh the page
+    """)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.metric("Total States/UTs", len(INDIA_DISTRICTS))
+    with col2:
+        total_districts = sum(len(districts) for districts in INDIA_DISTRICTS.values())
+        st.metric("Total Districts", total_districts)
+    
+    if st.button("🚀 Start Generating District Data", type="primary", key="generate_all"):
+        st.warning("⏳ This will take 20-30 minutes. Please don't close this window.")
+        
+        start_time = time.time()
+        all_districts_data = fetch_all_districts_data()
+        end_time = time.time()
+        
+        elapsed_time = end_time - start_time
+        st.success(f"✅ Completed in {elapsed_time/60:.1f} minutes!")
+        
+        # Store in session state
+        st.session_state['districts_data'] = all_districts_data
+        
+        # Display summary
+        st.subheader("📊 Summary")
+        total_successful = 0
+        total_failed = 0
+        
+        for state, districts in all_districts_data.items():
+            for district, data in districts.items():
+                if data.get('latitude') is not None:
+                    total_successful += 1
+                else:
+                    total_failed += 1
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("✅ Successful", total_successful)
+        with col2:
+            st.metric("❌ Failed", total_failed)
+        with col3:
+            success_rate = (total_successful / (total_successful + total_failed)) * 100
+            st.metric("Success Rate", f"{success_rate:.1f}%")
+        
+        # Preview data
+        st.subheader("📋 Data Preview")
+        
+        # Convert to flat list for preview
+        preview_data = []
+        for state, districts in all_districts_data.items():
+            for district, data in districts.items():
+                preview_data.append({
+                    'State': state,
+                    'District': district,
+                    'Latitude': data.get('latitude'),
+                    'Longitude': data.get('longitude'),
+                    'Display Name': data.get('display_name')
+                })
+        
+        preview_df = pd.DataFrame(preview_data)
+        st.dataframe(preview_df.head(20), use_container_width=True)
+        
+        # Download buttons
+        st.subheader("💾 Download Options")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # JSON download
+            json_str = json.dumps(all_districts_data, indent=2, ensure_ascii=False)
+            st.download_button(
+                label="📥 Download as JSON",
+                data=json_str,
+                file_name="india_districts_complete_data.json",
+                mime="application/json",
+                key="download_json"
+            )
+        
+        with col2:
+            # CSV download
+            csv_data = preview_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download as CSV",
+                data=csv_data,
+                file_name="india_districts_complete_data.csv",
+                mime="text/csv",
+                key="download_csv"
+            )
+        
+        # Map visualization
+        st.subheader("🗺️ Map Visualization")
+        map_df = preview_df[preview_df['Latitude'].notna()][['Latitude', 'Longitude']].rename(
+            columns={'Latitude': 'lat', 'Longitude': 'lon'}
+        )
+        if not map_df.empty:
+            st.map(map_df, zoom=4)
+    
+    # If data exists in session state, show download buttons
+    if 'districts_data' in st.session_state:
+        st.divider()
+        st.subheader("💾 Download Previously Generated Data")
+        
+        all_districts_data = st.session_state['districts_data']
+        
+        # Preview
+        preview_data = []
+        for state, districts in all_districts_data.items():
+            for district, data in districts.items():
+                preview_data.append({
+                    'State': state,
+                    'District': district,
+                    'Latitude': data.get('latitude'),
+                    'Longitude': data.get('longitude'),
+                    'Display Name': data.get('display_name')
+                })
+        
+        preview_df = pd.DataFrame(preview_data)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            json_str = json.dumps(all_districts_data, indent=2, ensure_ascii=False)
+            st.download_button(
+                label="📥 Download JSON (Hierarchical)",
+                data=json_str,
+                file_name="india_districts_complete_data.json",
+                mime="application/json",
+                key="download_json_saved"
+            )
+        
+        with col2:
+            csv_data = preview_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download CSV (Flat)",
+                data=csv_data,
+                file_name="india_districts_complete_data.csv",
+                mime="text/csv",
+                key="download_csv_saved"
+            )
+
+# Sidebar
+with st.sidebar:
+    st.header("ℹ️ Information")
+    st.markdown("""
+    ### Features:
+    - 🗺️ Uses OpenStreetMap Nominatim API
+    - 📍 Extracts district, state, pincode
+    - 📞 Finds phone numbers
+    - 🌍 Gets latitude & longitude
+    - 📊 Supports bulk CSV processing
+    - 💾 Generate complete districts database
+    
+    ### Supported Districts:
+    - All 787+ districts across India
+    - 36 States and UTs covered
+    
+    ### Rate Limits:
+    - 1 request per second for Nominatim API
+    - Bulk operations may take time
+    
+    ### JSON Structure:
+    ```json
+    {
+      "State Name": {
+        "District Name": {
+          "district": "...",
+          "state": "...",
+          "latitude": 12.34,
+          "longitude": 56.78,
+          "display_name": "...",
+          "address": {...}
+        }
+      }
+    }
+    ```
+    
+    ### Tips:
+    - Include district/state names for better results
+    - Add pincode if available
+    - More specific text = better geocoding
+    - Use Tab 3 to generate complete database
+    """)
+    
+    st.markdown("---")
+    st.caption("Powered by OpenStreetMap Nominatim API")
+    st.caption("⚠️ Please respect API usage policies")
