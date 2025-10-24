@@ -50,12 +50,6 @@ CAPITALS = {
   "Ladakh": ["Kargil", "Leh"],
   "Lakshadweep": ["Agatti", "Amini", "Andrott", "Kadmath", "Kavaratti", "Minicoy", "Chetlat", "Bitra"]
 }
-  
- 
-
-
-}
-
 
 # Overpass fetcher (fixed)
 def fetch_police_stations(state, city):
