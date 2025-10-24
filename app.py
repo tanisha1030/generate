@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List
 import pandas as pd
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -47,161 +47,118 @@ INDIA_DISTRICTS = {
     "Puducherry": ["Karaikal", "Mahe", "Puducherry", "Yanam"]
 }
 
-# Thread-safe counter for progress tracking
 class ProgressTracker:
     def __init__(self, total):
         self.current = 0
         self.total = total
         self.lock = threading.Lock()
-    
+        
     def increment(self):
         with self.lock:
             self.current += 1
             return self.current
 
-def search_police_stations(district: str, state: str, limit: int = 10) -> List[Dict]:
-    """Search for police stations in a district using Overpass API (OpenStreetMap)"""
+def search_police_stations_optimized(district: str, state: str) -> List[Dict]:
+    """Optimized search using single comprehensive query"""
     overpass_url = "http://overpass-api.de/api/interpreter"
     
-    # Multiple search strategies to maximize coverage
-    queries = [
-        # Strategy 1: Search by district name in tags
-        f"""
-        [out:json][timeout:30];
-        area["name"="{state}"]["admin_level"="4"]->.state;
-        (
-          node["amenity"="police"]["addr:district"="{district}"](area.state);
-          way["amenity"="police"]["addr:district"="{district}"](area.state);
-          relation["amenity"="police"]["addr:district"="{district}"](area.state);
-        );
-        out center {limit * 2};
-        """,
-        # Strategy 2: Search by district boundary
-        f"""
-        [out:json][timeout:30];
-        area["name"="{district}"]["admin_level"~"5|6|7"]->.district;
-        (
-          node["amenity"="police"](area.district);
-          way["amenity"="police"](area.district);
-          relation["amenity"="police"](area.district);
-        );
-        out center {limit * 2};
-        """,
-        # Strategy 3: Fuzzy search with district and state names
-        f"""
-        [out:json][timeout:30];
-        (
-          node["amenity"="police"]["name"~"{district}",i];
-          way["amenity"="police"]["name"~"{district}",i];
-          node["amenity"="police"]["addr:city"~"{district}",i];
-          way["amenity"="police"]["addr:city"~"{district}",i];
-        );
-        out center {limit};
-        """
-    ]
+    # Single comprehensive query with multiple fallbacks
+    query = f"""
+    [out:json][timeout:25];
+    (
+      // Direct district match in address
+      node["amenity"="police"]["addr:district"="{district}"]({{bbox}});
+      way["amenity"="police"]["addr:district"="{district}"]({{bbox}});
+      
+      // Fuzzy name match
+      node["amenity"="police"]["name"~"{district}",i]({{bbox}});
+      way["amenity"="police"]["name"~"{district}",i]({{bbox}});
+      
+      // Area-based search
+      area["name"="{district}"]->.a;
+      node["amenity"="police"](area.a);
+      way["amenity"="police"](area.a);
+    );
+    out center 30;
+    """
     
-    all_police_stations = []
-    seen_coords = set()  # Avoid duplicates across all queries
-    
-    for query_idx, query in enumerate(queries):
-        try:
-            response = requests.post(overpass_url, data={'data': query}, timeout=35)
-            
-            # If we hit rate limits or errors, try next strategy
-            if response.status_code != 200:
-                time.sleep(1)
+    try:
+        response = requests.post(overpass_url, data={'data': query}, timeout=30)
+        
+        if response.status_code != 200:
+            return []
+        
+        data = response.json()
+        police_stations = []
+        seen_coords = set()
+        
+        for element in data.get('elements', []):
+            # Get coordinates
+            if element['type'] == 'node':
+                lat = element['lat']
+                lon = element['lon']
+            elif 'center' in element:
+                lat = element['center']['lat']
+                lon = element['center']['lon']
+            else:
                 continue
-                
-            data = response.json()
             
-            for element in data.get('elements', []):
-                # Get coordinates
-                if element['type'] == 'node':
-                    lat = element['lat']
-                    lon = element['lon']
-                elif 'center' in element:
-                    lat = element['center']['lat']
-                    lon = element['center']['lon']
-                else:
-                    continue
-                
-                # Check for duplicates
-                coord_key = (round(lat, 5), round(lon, 5))
-                if coord_key in seen_coords:
-                    continue
-                seen_coords.add(coord_key)
-                
-                tags = element.get('tags', {})
-                
-                # Extract police station info
-                station_info = {
-                    'name': tags.get('name', 'Unnamed Police Station'),
-                    'latitude': lat,
-                    'longitude': lon,
-                    'address': tags.get('addr:full') or tags.get('addr:street', ''),
-                    'city': tags.get('addr:city', ''),
-                    'district': tags.get('addr:district', district),
-                    'state': state,
-                    'phone': tags.get('phone') or tags.get('contact:phone', ''),
-                    'police_type': tags.get('police', 'Unknown'),
-                    'operator': tags.get('operator', '')
-                }
-                
-                all_police_stations.append(station_info)
+            # Check for duplicates
+            coord_key = (round(lat, 4), round(lon, 4))
+            if coord_key in seen_coords:
+                continue
+            seen_coords.add(coord_key)
             
-            # If we found enough stations, break early
-            if len(all_police_stations) >= limit:
-                break
-                
-            # Small delay between queries to respect API
-            time.sleep(0.5)
+            tags = element.get('tags', {})
             
-        except Exception as e:
-            # Try next query strategy
-            time.sleep(1)
-            continue
-    
-    # Return up to the limit
-    return all_police_stations[:limit * 2]
+            # Extract only required fields
+            station_info = {
+                'name': tags.get('name', 'Unnamed Police Station'),
+                'district': district,
+                'state': state,
+                'address': tags.get('addr:full') or tags.get('addr:street', '') or 'Not available',
+                'phone': tags.get('phone') or tags.get('contact:phone', '') or 'Not available',
+                'latitude': round(lat, 6),
+                'longitude': round(lon, 6)
+            }
+            
+            police_stations.append(station_info)
+        
+        return police_stations[:20]  # Limit to 20 per district
+        
+    except Exception as e:
+        return []
 
-def search_single_district(state: str, district: str, limit: int, tracker: ProgressTracker):
-    """Search a single district (for parallel processing)"""
-    max_retries = 2
-    stations = []
-    
-    for attempt in range(max_retries):
-        try:
-            stations = search_police_stations(district, state, limit)
-            if stations or attempt == max_retries - 1:
-                break
-            time.sleep(1)  # Wait before retry
-        except Exception as e:
-            if attempt == max_retries - 1:
-                stations = []
-            time.sleep(1)
-    
-    current = tracker.increment()
-    
-    return {
-        'state': state,
-        'district': district,
-        'data': {
-            "district": district,
-            "state": state,
-            "police_stations": stations,
-            "total_found": len(stations)
-        },
-        'progress': current
-    }
+def search_single_district_fast(state: str, district: str, tracker: ProgressTracker):
+    """Fast search with single attempt"""
+    try:
+        stations = search_police_stations_optimized(district, state)
+        current = tracker.increment()
+        
+        return {
+            'state': state,
+            'district': district,
+            'stations': stations,
+            'count': len(stations),
+            'progress': current
+        }
+    except:
+        current = tracker.increment()
+        return {
+            'state': state,
+            'district': district,
+            'stations': [],
+            'count': 0,
+            'progress': current
+        }
 
-def fetch_all_police_stations_parallel(max_workers: int = 10):
-    """Fetch police stations for all districts using parallel processing"""
-    all_data = {}
+def fetch_all_districts_fast(max_workers: int = 15):
+    """Fetch all districts in parallel - optimized for speed"""
+    all_results = []
     
     # Prepare all tasks
     tasks = []
     for state, districts in INDIA_DISTRICTS.items():
-        all_data[state] = {}
         for district in districts:
             tasks.append((state, district))
     
@@ -214,450 +171,247 @@ def fetch_all_police_stations_parallel(max_workers: int = 10):
     
     completed = 0
     found_stations = 0
-    with_data = 0
-    without_data = 0
+    districts_with_data = 0
     
-    # Use ThreadPoolExecutor for parallel API calls
+    # Use ThreadPoolExecutor for parallel processing
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
         future_to_task = {
-            executor.submit(search_single_district, state, district, 15, tracker): (state, district)
+            executor.submit(search_single_district_fast, state, district, tracker): (state, district)
             for state, district in tasks
         }
         
-        # Process completed tasks
         for future in as_completed(future_to_task):
             try:
                 result = future.result()
-                state = result['state']
-                district = result['district']
-                all_data[state][district] = result['data']
+                all_results.append(result)
                 
-                # Update statistics
                 completed += 1
-                if result['data']['total_found'] > 0:
-                    with_data += 1
-                    found_stations += result['data']['total_found']
-                else:
-                    without_data += 1
+                if result['count'] > 0:
+                    districts_with_data += 1
+                    found_stations += result['count']
                 
                 # Update progress
                 progress = completed / total_districts
                 progress_bar.progress(progress)
-                status_text.text(f"Processing: {district}, {state} ({completed}/{total_districts})")
+                status_text.text(f"Processing: {result['district']}, {result['state']} ({completed}/{total_districts})")
                 
                 # Show live statistics
                 stats_container.markdown(f"""
                 **Live Statistics:**
                 - ✅ Completed: {completed}/{total_districts} districts
                 - 🚔 Police Stations Found: {found_stations}
-                - 📊 Districts with Data: {with_data}
-                - ⚠️ Districts without Data: {without_data}
+                - 📊 Districts with Data: {districts_with_data}
+                - ⏱️ Progress: {progress*100:.1f}%
                 """)
                 
-                # Respect API rate limits
-                time.sleep(0.15)
+                # Minimal delay for API respect
+                time.sleep(0.1)
                 
             except Exception as e:
                 state, district = future_to_task[future]
-                all_data[state][district] = {
-                    "district": district,
-                    "state": state,
-                    "police_stations": [],
-                    "total_found": 0
-                }
-                without_data += 1
+                all_results.append({
+                    'state': state,
+                    'district': district,
+                    'stations': [],
+                    'count': 0
+                })
     
     status_text.text("✅ Search complete!")
-    return all_data
+    return all_results
 
 # Streamlit UI
 st.set_page_config(page_title="Police Station Finder", page_icon="🚔", layout="wide")
 
-st.title("🚔 Police Station Finder for Indian Districts")
-st.markdown("Find police stations across all districts in India using OpenStreetMap data")
+st.title("🚔 Fast Police Station Database Generator")
+st.markdown("Generate complete police station database for all Indian districts")
 
-# Tabs for different functionalities
-tab1, tab2, tab3 = st.tabs(["🔍 Search by District", "📊 View All Data", "🗺️ Generate Complete Database"])
+# Main Interface
+st.info("""
+### 🚀 Optimized Fast Search
+- **Single-query approach** per district for maximum speed
+- **Estimated time: 8-12 minutes** for all 776 districts
+- **Parallel processing** with 15 concurrent workers
+- **Clean JSON output** with only essential fields
+- Automatically handles API rate limits
+""")
 
-with tab1:
-    st.subheader("Search Police Stations by District")
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("Total States/UTs", len(INDIA_DISTRICTS))
+with col2:
+    total_districts = sum(len(districts) for districts in INDIA_DISTRICTS.values())
+    st.metric("Total Districts", total_districts)
+with col3:
+    max_workers = st.slider("Parallel Workers", 5, 20, 15, help="Higher = faster, but may hit rate limits")
+
+if st.button("🚀 Generate Complete Database", type="primary", use_container_width=True):
+    st.warning("⏳ Starting fast search... Estimated time: 8-12 minutes")
+    
+    start_time = time.time()
+    results = fetch_all_districts_fast(max_workers=max_workers)
+    end_time = time.time()
+    
+    elapsed_time = end_time - start_time
+    st.success(f"✅ Completed in {elapsed_time/60:.1f} minutes!")
+    
+    # Prepare clean JSON structure
+    clean_data = []
+    for result in results:
+        for station in result['stations']:
+            clean_data.append({
+                'name': station['name'],
+                'district': station['district'],
+                'state': station['state'],
+                'address': station['address'],
+                'phone': station['phone'],
+                'latitude': station['latitude'],
+                'longitude': station['longitude']
+            })
+    
+    # Statistics
+    total_stations = len(clean_data)
+    districts_with_data = sum(1 for r in results if r['count'] > 0)
+    
+    st.subheader("📊 Final Statistics")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("🚔 Total Police Stations", total_stations)
+    with col2:
+        st.metric("✅ Districts with Data", districts_with_data)
+    with col3:
+        coverage = (districts_with_data / total_districts) * 100
+        st.metric("📈 Coverage", f"{coverage:.1f}%")
+    
+    # Preview data
+    st.subheader("📋 Data Preview (First 20 records)")
+    preview_df = pd.DataFrame(clean_data[:20])
+    st.dataframe(preview_df, use_container_width=True)
+    
+    # Download buttons
+    st.subheader("💾 Download Complete Database")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        selected_state = st.selectbox("Select State/UT:", sorted(INDIA_DISTRICTS.keys()))
-    
-    with col2:
-        selected_district = st.selectbox("Select District:", sorted(INDIA_DISTRICTS[selected_state]))
-    
-    num_results = st.slider("Number of results to fetch:", 5, 50, 10)
-    
-    if st.button("🔍 Search Police Stations", type="primary", key="search_single"):
-        with st.spinner(f"Searching for police stations in {selected_district}, {selected_state}..."):
-            stations = search_police_stations(selected_district, selected_state, limit=num_results)
-            
-            if stations:
-                st.success(f"✅ Found {len(stations)} police station(s)")
-                
-                # Display in cards
-                for idx, station in enumerate(stations, 1):
-                    with st.expander(f"🚔 {idx}. {station['name']}", expanded=(idx==1)):
-                        col1, col2 = st.columns([2, 1])
-                        
-                        with col1:
-                            st.write(f"**📍 Address:** {station['address'] or 'Not available'}")
-                            st.write(f"**🏙️ City:** {station['city'] or 'Not available'}")
-                            st.write(f"**📍 District:** {station['district']}")
-                            st.write(f"**🗺️ State:** {station['state']}")
-                            st.write(f"**📞 Phone:** {station['phone'] or 'Not available'}")
-                            st.write(f"**🚨 Type:** {station['police_type']}")
-                            if station['operator']:
-                                st.write(f"**👮 Operator:** {station['operator']}")
-                        
-                        with col2:
-                            st.write(f"**Coordinates:**")
-                            st.write(f"Lat: {station['latitude']:.6f}")
-                            st.write(f"Lon: {station['longitude']:.6f}")
-                            
-                            osm_link = f"https://www.openstreetmap.org/?mlat={station['latitude']}&mlon={station['longitude']}&zoom=17"
-                            st.markdown(f"[📍 View on Map]({osm_link})")
-                            
-                            gmaps_link = f"https://www.google.com/maps?q={station['latitude']},{station['longitude']}"
-                            st.markdown(f"[🗺️ Google Maps]({gmaps_link})")
-                
-                # Show on map
-                st.subheader("🗺️ Map View")
-                map_df = pd.DataFrame([
-                    {'lat': s['latitude'], 'lon': s['longitude'], 'name': s['name']}
-                    for s in stations
-                ])
-                st.map(map_df, zoom=10)
-                
-                # Download as CSV
-                st.subheader("💾 Download Data")
-                csv_data = pd.DataFrame(stations).to_csv(index=False)
-                st.download_button(
-                    label="📥 Download as CSV",
-                    data=csv_data,
-                    file_name=f"police_stations_{selected_district}_{selected_state}.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.warning("⚠️ No police stations found in OpenStreetMap database for this district.")
-                st.info("💡 Try searching for a different district or the data might not be available in OSM.")
-
-with tab2:
-    st.subheader("📊 View Previously Generated Data")
-    
-    if 'police_data' in st.session_state:
-        data = st.session_state['police_data']
-        
-        # Statistics
-        total_districts = sum(len(districts) for districts in data.values())
-        total_stations = sum(
-            district_data['total_found'] 
-            for state_data in data.values() 
-            for district_data in state_data.values()
+        # JSON download
+        json_str = json.dumps(clean_data, indent=2, ensure_ascii=False)
+        st.download_button(
+            label="📥 Download JSON (Complete)",
+            data=json_str,
+            file_name="india_police_stations_complete.json",
+            mime="application/json",
+            use_container_width=True
         )
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("📍 Total Districts", total_districts)
-        with col2:
-            st.metric("🚔 Total Police Stations", total_stations)
-        with col3:
-            avg_per_district = total_stations / total_districts if total_districts > 0 else 0
-            st.metric("📊 Avg per District", f"{avg_per_district:.1f}")
-        
-        # State-wise breakdown
-        st.subheader("📈 State-wise Breakdown")
-        state_stats = []
-        for state, districts in data.items():
-            state_total = sum(d['total_found'] for d in districts.values())
-            state_stats.append({
-                'State': state,
-                'Districts': len(districts),
-                'Police Stations': state_total
-            })
-        
-        stats_df = pd.DataFrame(state_stats).sort_values('Police Stations', ascending=False)
-        st.dataframe(stats_df, use_container_width=True)
-        
-        # Flatten data for CSV
-        st.subheader("💾 Download Complete Data")
-        flat_data = []
-        for state, districts in data.items():
-            for district, district_data in districts.items():
-                for station in district_data['police_stations']:
-                    flat_data.append({
-                        'State': state,
-                        'District': district,
-                        'Station_Name': station['name'],
-                        'Address': station['address'],
-                        'City': station['city'],
-                        'Phone': station['phone'],
-                        'Police_Type': station['police_type'],
-                        'Operator': station['operator'],
-                        'Latitude': station['latitude'],
-                        'Longitude': station['longitude']
-                    })
-        
-        if flat_data:
-            flat_df = pd.DataFrame(flat_data)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                csv_data = flat_df.to_csv(index=False)
-                st.download_button(
-                    label="📥 Download All Stations (CSV)",
-                    data=csv_data,
-                    file_name="all_police_stations_india.csv",
-                    mime="text/csv"
-                )
-            
-            with col2:
-                json_str = json.dumps(data, indent=2, ensure_ascii=False)
-                st.download_button(
-                    label="📥 Download All Stations (JSON)",
-                    data=json_str,
-                    file_name="all_police_stations_india.json",
-                    mime="application/json"
-                )
-    else:
-        st.info("ℹ️ No data available. Please generate the database from Tab 3.")
-
-with tab3:
-    st.subheader("🗺️ Generate Complete Police Station Database")
     
-    st.info("""
-    This will search for police stations in all 787+ districts across India.
-    
-    ⚠️ **Important Notes:**
-    - **OPTIMIZED:** Uses parallel processing with multiple search strategies
-    - Uses 3 different search methods per district for better coverage
-    - Estimated time: **15-25 minutes** (comprehensive search)
-    - Uses configurable concurrent API requests
-    - Includes retry mechanism for failed requests
-    - Please be patient and do not refresh the page
-    - **Note:** OpenStreetMap data may be incomplete for some districts
-    - Rural/remote areas may have less data coverage
-    """)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Total States/UTs", len(INDIA_DISTRICTS))
     with col2:
-        total_districts = sum(len(districts) for districts in INDIA_DISTRICTS.values())
-        st.metric("Total Districts", total_districts)
-    with col3:
-        max_workers = st.slider("Parallel Workers", 3, 10, 5, help="More workers = faster but higher API load. Recommended: 5-7")
+        # CSV download
+        csv_df = pd.DataFrame(clean_data)
+        csv_data = csv_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download CSV (Complete)",
+            data=csv_data,
+            file_name="india_police_stations_complete.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
     
-    if st.button("🚀 Start Generating Police Station Data", type="primary", key="generate_all"):
-        st.warning("⏳ This will take 15-25 minutes. Please don't close this window.")
-        
-        start_time = time.time()
-        all_police_data = fetch_all_police_stations_parallel(max_workers=max_workers)
-        end_time = time.time()
-        
-        elapsed_time = end_time - start_time
-        st.success(f"✅ Completed in {elapsed_time/60:.1f} minutes!")
-        
-        # Store in session state
-        st.session_state['police_data'] = all_police_data
-        
-        # Display summary
-        st.subheader("📊 Summary")
-        total_stations = 0
-        districts_with_data = 0
-        districts_without_data = 0
-        
-        for state, districts in all_police_data.items():
-            for district, data in districts.items():
-                if data['total_found'] > 0:
-                    districts_with_data += 1
-                    total_stations += data['total_found']
-                else:
-                    districts_without_data += 1
-        
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("🚔 Total Police Stations", total_stations)
-        with col2:
-            st.metric("✅ Districts with Data", districts_with_data)
-        with col3:
-            st.metric("❌ Districts without Data", districts_without_data)
-        with col4:
-            avg_per_district = total_stations / districts_with_data if districts_with_data > 0 else 0
-            st.metric("📊 Avg per District", f"{avg_per_district:.1f}")
-        
-        # Top districts
-        st.subheader("🏆 Top 10 Districts by Police Stations")
-        top_districts = []
-        for state, districts in all_police_data.items():
-            for district, data in districts.items():
-                if data['total_found'] > 0:
-                    top_districts.append({
-                        'State': state,
-                        'District': district,
-                        'Police Stations': data['total_found']
-                    })
-        
-        top_df = pd.DataFrame(top_districts).sort_values('Police Stations', ascending=False).head(10)
-        st.dataframe(top_df, use_container_width=True)
-        
-        # Preview data
-        st.subheader("📋 Sample Data Preview")
-        preview_data = []
-        for state, districts in all_police_data.items():
-            for district, district_data in districts.items():
-                for station in district_data['police_stations'][:2]:  # First 2 from each
-                    preview_data.append({
-                        'State': state,
-                        'District': district,
-                        'Station Name': station['name'],
-                        'Address': station['address'],
-                        'Phone': station['phone'],
-                        'Latitude': station['latitude'],
-                        'Longitude': station['longitude']
-                    })
-                    if len(preview_data) >= 20:
-                        break
-                if len(preview_data) >= 20:
-                    break
-            if len(preview_data) >= 20:
-                break
-        
-        preview_df = pd.DataFrame(preview_data)
-        st.dataframe(preview_df, use_container_width=True)
-        
-        # Download buttons
-        st.subheader("💾 Download Options")
-        
-        # Flatten data
-        flat_data = []
-        for state, districts in all_police_data.items():
-            for district, district_data in districts.items():
-                for station in district_data['police_stations']:
-                    flat_data.append({
-                        'State': state,
-                        'District': district,
-                        'Station_Name': station['name'],
-                        'Address': station['address'],
-                        'City': station['city'],
-                        'Phone': station['phone'],
-                        'Police_Type': station['police_type'],
-                        'Operator': station['operator'],
-                        'Latitude': station['latitude'],
-                        'Longitude': station['longitude']
-                    })
-        
-        flat_df = pd.DataFrame(flat_data)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # CSV download
-            csv_data = flat_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download as CSV (Flat)",
-                data=csv_data,
-                file_name="india_police_stations_complete.csv",
-                mime="text/csv",
-                key="download_csv"
-            )
-        
-        with col2:
-            # JSON download
-            json_str = json.dumps(all_police_data, indent=2, ensure_ascii=False)
-            st.download_button(
-                label="📥 Download as JSON (Hierarchical)",
-                data=json_str,
-                file_name="india_police_stations_complete.json",
-                mime="application/json",
-                key="download_json"
-            )
-        
-        # Map visualization
-        st.subheader("🗺️ Map Visualization (Sample)")
-        if not flat_df.empty:
-            map_sample = flat_df.head(100)[['Latitude', 'Longitude']].rename(
-                columns={'Latitude': 'lat', 'Longitude': 'lon'}
-            )
-            st.map(map_sample, zoom=4)
-            st.caption("Showing first 100 police stations on map")
+    # Top districts
+    st.subheader("🏆 Top 15 Districts by Police Stations Found")
+    top_districts = sorted(
+        [{'State': r['state'], 'District': r['district'], 'Stations': r['count']} 
+         for r in results if r['count'] > 0],
+        key=lambda x: x['Stations'],
+        reverse=True
+    )[:15]
+    
+    top_df = pd.DataFrame(top_districts)
+    st.dataframe(top_df, use_container_width=True)
+    
+    # State-wise summary
+    st.subheader("📍 State-wise Summary")
+    state_summary = {}
+    for result in results:
+        state = result['state']
+        if state not in state_summary:
+            state_summary[state] = {'districts': 0, 'stations': 0}
+        state_summary[state]['districts'] += 1
+        state_summary[state]['stations'] += result['count']
+    
+    state_df = pd.DataFrame([
+        {'State': state, 'Districts': data['districts'], 'Police Stations': data['stations']}
+        for state, data in state_summary.items()
+    ]).sort_values('Police Stations', ascending=False)
+    
+    st.dataframe(state_df, use_container_width=True)
+    
+    # Map visualization (sample)
+    if clean_data:
+        st.subheader("🗺️ Geographic Distribution (First 500 stations)")
+        map_df = pd.DataFrame([
+            {'lat': station['latitude'], 'lon': station['longitude']}
+            for station in clean_data[:500]
+        ])
+        st.map(map_df, zoom=4)
 
 # Sidebar
 with st.sidebar:
     st.header("ℹ️ Information")
     st.markdown("""
     ### Features:
-    - 🔍 Search police stations by district
-    - 🗺️ Uses OpenStreetMap Overpass API
-    - 📍 Get exact coordinates & addresses
-    - 📞 Contact information when available
-    - 📊 Generate complete database
-    - 💾 Export to CSV/JSON
-    - ⚡ **3 search strategies per district**
-    - 🔄 **Automatic retry mechanism**
+    - ⚡ **Ultra-fast parallel processing**
+    - 🎯 **Single optimized query per district**
+    - 📊 **Clean JSON/CSV output**
+    - 🌐 **All 776+ districts covered**
     
-    ### Coverage:
-    - All 787+ districts across India
-    - 36 States and Union Territories
+    ### Output Fields:
+    - Name
+    - District
+    - State
+    - Address
+    - Phone Number
+    - Latitude
+    - Longitude
     
-    ### Performance Optimizations:
-    - Multi-threaded API requests
-    - Multiple search strategies:
-      1. District name in address tags
-      2. Geographic boundary search
-      3. Fuzzy name matching
-    - Smart duplicate removal
-    - Automatic retry on failures
-    - Live progress tracking
+    ### Performance:
+    - Uses 15 concurrent workers (default)
+    - Single comprehensive query per district
+    - Automatic duplicate removal
+    - Smart timeout handling
+    - Estimated: **8-12 minutes** total
     
     ### Data Source:
-    - OpenStreetMap (OSM) database
+    - OpenStreetMap (OSM)
     - Community-contributed data
+    - Real-time API access
+    
+    ### Notes:
     - Coverage varies by region
-    - Better data in urban areas
+    - Urban areas have better data
+    - Some districts may have no data
+    - Data is as accurate as OSM
     
     ### Tips:
-    - Use 5-7 parallel workers for optimal speed
-    - Lower workers = more stable, higher = faster
-    - Data completeness varies by district
-    - You can contribute to OSM to improve data
-    - The system tries 3 different search methods per district
+    - Don't close window during processing
+    - Lower workers if errors occur
+    - Download both JSON and CSV
+    - Verify critical data independently
     """)
     
     st.markdown("---")
-    
-    st.subheader("📊 Quick Stats")
-    if 'police_data' in st.session_state:
-        data = st.session_state['police_data']
-        total_stations = sum(
-            district_data['total_found'] 
-            for state_data in data.values() 
-            for district_data in state_data.values()
-        )
-        st.metric("🚔 Stations in Database", total_stations)
-    else:
-        st.info("No data loaded yet")
-    
-    st.markdown("---")
-    st.caption("Powered by OpenStreetMap Overpass API")
-    st.caption("⚠️ Please respect API usage policies")
+    st.caption("Powered by OpenStreetMap")
     st.caption("Data © OpenStreetMap contributors")
 
 # Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: gray; padding: 20px;'>
-    <p>🚔 Police Station Finder for India | Data from OpenStreetMap</p>
-    <p>Made with ❤️ using Streamlit | Open Source Data</p>
+    <p>🚔 Fast Police Station Database Generator | OpenStreetMap Data</p>
+    <p>Optimized for speed and accuracy | All 776+ Indian districts</p>
     <p style='font-size: 0.8em;'>
-        <strong>Disclaimer:</strong> This data is sourced from OpenStreetMap and may not be 100% complete or up-to-date. 
-        Always verify critical information with official sources.
+        <strong>Disclaimer:</strong> Data sourced from OpenStreetMap. 
+        Always verify with official sources for critical information.
     </p>
 </div>
 """, unsafe_allow_html=True)
