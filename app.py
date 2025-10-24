@@ -174,11 +174,23 @@ def find_district_and_state(text: str) -> Tuple[Optional[str], Optional[str]]:
     
     return None, None
 
+def extract_full_address(text: str) -> str:
+    """Extract the full address from text by cleaning and formatting"""
+    # Remove extra whitespace and newlines
+    cleaned = re.sub(r'\s+', ' ', text.strip())
+    # Remove common prefixes
+    prefixes = ['address:', 'location:', 'office:', 'addr:']
+    for prefix in prefixes:
+        if cleaned.lower().startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+    return cleaned
+
 def extract_address_components(text: str) -> Dict:
     """Extract all address components from text"""
     district, state = find_district_and_state(text)
     phone_numbers = extract_phone_numbers(text)
     pincode = extract_pincode(text)
+    full_address = extract_full_address(text)
     
     location_data = None
     if district and state:
@@ -191,6 +203,7 @@ def extract_address_components(text: str) -> Dict:
         location_data = geocode_with_nominatim(search_query)
     
     return {
+        'full_address': full_address,
         'district': district,
         'state': state,
         'pincode': pincode,
@@ -225,6 +238,9 @@ with tab1:
                 
                 with col1:
                     st.subheader("📄 Extracted Information")
+                    
+                    if result['full_address']:
+                        st.success(f"**Full Address:** {result['full_address']}")
                     
                     if result['state']:
                         st.success(f"**State:** {result['state']}")
@@ -295,13 +311,14 @@ with tab2:
                 
                 result_row = {
                     'Original_Text': text,
+                    'Full_Address': extracted['full_address'],
                     'State': extracted['state'],
                     'District': extracted['district'],
                     'Pincode': extracted['pincode'],
                     'Phone_Numbers': ', '.join(extracted['phone_numbers']) if extracted['phone_numbers'] else None,
                     'Latitude': extracted['location_data']['latitude'] if extracted['location_data'] else None,
                     'Longitude': extracted['location_data']['longitude'] if extracted['location_data'] else None,
-                    'Full_Address': extracted['location_data']['display_name'] if extracted['location_data'] else None
+                    'Geocoded_Address': extracted['location_data']['display_name'] if extracted['location_data'] else None
                 }
                 results.append(result_row)
                 
