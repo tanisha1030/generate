@@ -45,7 +45,6 @@ INDIA_DISTRICTS = {
     "Lakshadweep": ["Agatti", "Amini", "Andrott", "Kadmath", "Kavaratti", "Minicoy", "Chetlat", "Bitra"],
     "Puducherry": ["Karaikal", "Mahe", "Puducherry", "Yanam"]
 }
-
 def geocode_with_nominatim(query: str) -> Optional[Dict]:
     """Geocode address using OpenStreetMap Nominatim API"""
     base_url = "https://nominatim.openstreetmap.org/search"
