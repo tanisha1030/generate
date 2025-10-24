@@ -14,12 +14,12 @@ You can download the dataset as a JSON file.
 
 # ✅ State & UT capitals
 CAPITALS = {
-        "Andhra Pradesh": ["Anantapur", "Chittoor", "East Godavari", "Guntur", "Krishna", "Kurnool", "Nellore", "Prakasam", "Srikakulam", "Visakhapatnam"],
+    "Andhra Pradesh": ["Anantapur", "Chittoor", "East Godavari", "Guntur", "Krishna", "Kurnool", "Nellore", "Prakasam", "Srikakulam", "Visakhapatnam"],
     "Arunachal Pradesh": ["Tawang", "West Kameng", "East Kameng", "Papum Pare", "Kurung Kumey", "Kra Daadi", "Lower Subansiri", "Upper Subansiri", "West Siang", "East Siang"],
     "Assam": ["Baksa", "Barpeta", "Biswanath", "Bongaigaon", "Cachar", "Charaideo", "Chirang", "Darrang", "Dhemaji", "Dhubri"],
     "Bihar": ["Patna", "Gaya", "Muzaffarpur", "Bhagalpur", "Purnia", "Darbhanga", "Bhojpur", "Nalanda", "Rohtas", "Begusarai"],
     "Chhattisgarh": ["Raipur", "Bilaspur", "Durg", "Korba", "Rajnandgaon", "Raigarh", "Bastar", "Kanker", "Dhamtari", "Jagdalpur"],
-    "Goa": ["North Goa", "South Goa"],  # only 2 districts, all included
+    "Goa": ["North Goa", "South Goa"],
     "Gujarat": ["Ahmedabad", "Surat", "Vadodara", "Rajkot", "Bhavnagar", "Jamnagar", "Junagadh", "Gandhinagar", "Anand", "Bharuch"],
     "Haryana": ["Ambala", "Bhiwani", "Faridabad", "Gurugram", "Hisar", "Jhajjar", "Jind", "Kaithal", "Karnal", "Kurukshetra"],
     "Himachal Pradesh": ["Shimla", "Mandi", "Kullu", "Solan", "Kangra", "Una", "Chamba", "Bilaspur", "Sirmaur", "Hamirpur"],
@@ -53,7 +53,7 @@ CAPITALS = {
     "Puducherry": ["Puducherry"]
 }
 
-# Overpass fetcher
+# Overpass fetcher (fixed)
 def fetch_police_stations(state, city):
     query = f"""
     [out:json][timeout:60];
@@ -69,10 +69,25 @@ def fetch_police_stations(state, city):
         stations = []
         for el in data.get("elements", []):
             tags = el.get("tags", {})
+
+            # Build address from available tags
+            address_parts = [
+                tags.get("addr:housenumber"),
+                tags.get("addr:street"),
+                tags.get("addr:suburb"),
+                tags.get("addr:city") or city,
+                tags.get("addr:state") or state,
+                tags.get("addr:postcode")
+            ]
+            address = ", ".join([part for part in address_parts if part]) or f"{city}, {state}"
+
+            # Phone handling
+            phone = tags.get("phone") or tags.get("contact:phone") or tags.get("contact:mobile") or "N/A"
+
             stations.append({
                 "name": tags.get("name", "Unknown"),
-                "address": tags.get("addr:full") or f"{city}, {state}",
-                "phone": tags.get("phone") or tags.get("contact:phone", "N/A"),
+                "address": address,
+                "phone": phone,
                 "lat": el.get("lat"),
                 "lon": el.get("lon")
             })
@@ -97,9 +112,10 @@ if st.button("🚀 Fetch All Capitals"):
             stations = fetch_police_stations(state, city)
             all_data[state][city] = stations
             progress.progress(current / total_cities)
-            time.sleep(1.5)  # respect API limits
+            time.sleep(1.5)  # Respect API limits
 
     st.success(f"✅ Completed fetching for {total_cities} capitals!")
+
     json_output = json.dumps(all_data, indent=2, ensure_ascii=False)
     st.download_button(
         label="📥 Download JSON of Capitals Police Stations",
