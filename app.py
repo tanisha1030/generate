@@ -1,62 +1,55 @@
+import streamlit as st
 import requests
 import json
-import csv
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
 
-# =============================
-# 1️⃣ Your full state-district data
-# =============================
+st.set_page_config(page_title="🚓 Police Stations Finder", layout="wide")
+
+# ==========================================
+# 🗺️ State–District Dictionary (Example)
+# 👉 You can extend this to all 800 districts
+# ==========================================
 INDIA_REGIONS = {
-    "Andhra Pradesh": ["Anantapur", "Chittoor", "East Godavari", "Guntur", "Krishna", "Kurnool", "Nellore", "Prakasam", "Srikakulam", "Visakhapatnam", "Vizianagaram", "West Godavari", "Kadapa"],
-    "Arunachal Pradesh": ["Tawang", "West Kameng", "East Kameng", "Papum Pare", "Kurung Kumey", "Kra Daadi", "Lower Subansiri", "Upper Subansiri", "West Siang", "East Siang", "Siang", "Upper Siang", "Lower Siang", "Lower Dibang Valley", "Dibang Valley", "Anjaw", "Lohit", "Namsai", "Changlang", "Tirap", "Longding"],
-    "Assam": ["Baksa", "Barpeta", "Biswanath", "Bongaigaon", "Cachar", "Charaideo", "Chirang", "Darrang", "Dhemaji", "Dhubri", "Dibrugarh", "Goalpara", "Golaghat", "Hailakandi", "Jorhat", "Kamrup", "Kamrup Metropolitan", "Karbi Anglong", "Karimganj", "Kokrajhar", "Lakhimpur", "Majuli", "Morigaon", "Nagaon", "Nalbari", "Sivasagar", "Sonitpur", "Tinsukia", "Udalguri"],
+    "Andhra Pradesh": ["Anantapur", "Chittoor", "East Godavari", "Guntur", "Krishna", "Kurnool"],
+    "Arunachal Pradesh": ["Tawang", "West Kameng", "East Kameng", "Papum Pare"],
+    "Assam": ["Baksa", "Barpeta", "Biswanath", "Bongaigaon", "Cachar"],
+    "Bihar": ["Araria", "Arwal", "Aurangabad", "Banka", "Begusarai", "Bhagalpur"]
+    # ... paste rest here if needed
 }
 
-# =============================
-# 2️⃣ Function to query Overpass
-# =============================
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
+# ==========================================
+# 🚔 Fetch Function (Optimized)
+# ==========================================
 def get_police_station(state, district):
-    """
-    Try to fetch at least one police station in a district using Overpass API
-    """
+    """Return at least one police station for a district"""
     queries = [
         f"""
         [out:json][timeout:20];
+        area["name"="{district}"]->.searchArea;
+        node["amenity"="police"](area.searchArea);
+        out 1;
+        """,
+        f"""
+        [out:json][timeout:20];
         area["name"="{state}"]->.state;
-        area["name"="{district}"]->.district;
-        node["amenity"="police"](area.district);
-        out 1;
-        """,
-        f"""
-        [out:json][timeout:20];
-        node["amenity"="police"]["addr:district"="{district}"](area);
-        out 1;
-        """,
-        f"""
-        [out:json][timeout:20];
-        node["amenity"="police"](if:is_in("{district}", "{state}"));
-        out 1;
-        """,
-        f"""
-        [out:json][timeout:20];
-        node["amenity"="police"]["name"~"{district}",i];
+        node["amenity"="police"](area.state);
         out 1;
         """
     ]
-    
-    for query in queries:
+
+    for q in queries:
         try:
-            res = requests.post(OVERPASS_URL, data={"data": query}, timeout=25)
+            res = requests.post(OVERPASS_URL, data={"data": q}, timeout=25)
             data = res.json()
-            if "elements" in data and len(data["elements"]) > 0:
+            if "elements" in data and data["elements"]:
                 el = data["elements"][0]
                 return {
                     "state": state,
                     "district": district,
-                    "name": el.get("tags", {}).get("name", "Unnamed Station"),
+                    "name": el.get("tags", {}).get("name", "Unnamed Police Station"),
                     "lat": el.get("lat"),
                     "lon": el.get("lon")
                 }
@@ -64,45 +57,56 @@ def get_police_station(state, district):
             continue
     return {"state": state, "district": district, "name": None, "lat": None, "lon": None}
 
-# =============================
-# 3️⃣ Parallel fetcher
-# =============================
-def fetch_all_police_stations(max_workers=15):
+
+# ==========================================
+# ⚡ Fetch All in Parallel
+# ==========================================
+def fetch_districts(selected_states):
     results = []
     futures = []
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for state, districts in INDIA_REGIONS.items():
-            for district in districts:
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        for state in selected_states:
+            for district in INDIA_REGIONS[state]:
                 futures.append(executor.submit(get_police_station, state, district))
-
-        for future in as_completed(futures):
-            result = future.result()
+        progress = st.progress(0)
+        total = len(futures)
+        for i, f in enumerate(as_completed(futures), 1):
+            result = f.result()
             results.append(result)
-            if result["name"]:
-                print(f"✅ {result['district']}, {result['state']} → {result['name']}")
-            else:
-                print(f"❌ {result['district']}, {result['state']} → Not found")
-
+            progress.progress(i / total)
     return results
 
-# =============================
-# 4️⃣ Run and save results
-# =============================
-if __name__ == "__main__":
-    print("Fetching police station data for all districts in India...")
-    start = time.time()
-    all_results = fetch_all_police_stations()
-    print(f"\nDone in {round(time.time()-start, 2)} seconds")
 
-    # Save as JSON
-    with open("police_stations.json", "w", encoding="utf-8") as f:
-        json.dump(all_results, f, ensure_ascii=False, indent=2)
+# ==========================================
+# 🎯 Streamlit UI
+# ==========================================
+st.title("🚓 Police Stations in Indian Districts")
+st.markdown("Fetch **at least one police station** per district from OpenStreetMap (Overpass API).")
 
-    # Save as CSV
-    with open("police_stations.csv", "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["state", "district", "name", "lat", "lon"])
-        writer.writeheader()
-        writer.writerows(all_results)
+selected_states = st.multiselect(
+    "Select States",
+    list(INDIA_REGIONS.keys()),
+    default=["Andhra Pradesh"]
+)
 
-    print("\n✅ Saved results to police_stations.json and police_stations.csv")
+if st.button("🔍 Fetch Police Stations"):
+    if not selected_states:
+        st.warning("Please select at least one state.")
+    else:
+        with st.spinner("Fetching police station data... ⏳"):
+            data = fetch_districts(selected_states)
+
+        df = pd.DataFrame(data)
+        st.success("✅ Data fetched successfully!")
+
+        st.dataframe(df)
+
+        # Filter found stations
+        found = df.dropna(subset=["name"])
+        st.map(found.rename(columns={"lat": "latitude", "lon": "longitude"}))
+
+        # Download buttons
+        st.download_button("📥 Download JSON", json.dumps(data, ensure_ascii=False, indent=2), "police_stations.json")
+        st.download_button("📥 Download CSV", found.to_csv(index=False).encode("utf-8"), "police_stations.csv")
+
+st.caption("⚡ Optimized by parallel requests + Overpass API | Created by ChatGPT")
