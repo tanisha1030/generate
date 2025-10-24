@@ -174,6 +174,72 @@ def find_district_and_state(text: str) -> Tuple[Optional[str], Optional[str]]:
     
     return None, None
 
+def extract_street_address(text: str) -> Optional[str]:
+    """Extract street address components from text"""
+    # Remove phone numbers first to avoid confusion
+    text_clean = text
+    for pattern in [r'\+91[-\s]?\d{10}', r'\b\d{10}\b', r'\b\d{5}[-\s]?\d{5}\b']:
+        text_clean = re.sub(pattern, '', text_clean)
+    
+    # Common address keywords that indicate start of address
+    address_keywords = [
+        'address:', 'addr:', 'location:', 'office:', 'shop:', 'building:',
+        'flat', 'floor', 'plot', 'house', 'street', 'road', 'lane', 'avenue',
+        'sector', 'block', 'phase', 'near', 'opposite', 'behind'
+    ]
+    
+    # Try to find address section
+    lines = text_clean.split('\n')
+    address_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        # Check if line contains address-like content
+        line_lower = line.lower()
+        has_keyword = any(keyword in line_lower for keyword in address_keywords)
+        has_number = bool(re.search(r'\d', line))
+        
+        if has_keyword or has_number:
+            # Clean the line
+            for prefix in ['address:', 'addr:', 'location:', 'office:']:
+                if line_lower.startswith(prefix):
+                    line = line[len(prefix):].strip()
+            address_lines.append(line)
+    
+    if address_lines:
+        return ', '.join(address_lines)
+    
+    # If no structured address found, return cleaned text
+    return text_clean.strip()
+
+def format_complete_address(result: Dict) -> str:
+    """Format a complete address from extracted components"""
+    address_parts = []
+    
+    # Add street address if available
+    if result.get('street_address'):
+        address_parts.append(result['street_address'])
+    
+    # Add district
+    if result.get('district'):
+        address_parts.append(result['district'])
+    
+    # Add state
+    if result.get('state'):
+        address_parts.append(result['state'])
+    
+    # Add pincode
+    if result.get('pincode'):
+        address_parts.append(result['pincode'])
+    
+    # Add country
+    address_parts.append("India")
+    
+    return ', '.join(address_parts)
+
 def extract_full_address(text: str) -> str:
     """Extract the full address from text by cleaning and formatting"""
     # Remove extra whitespace and newlines
@@ -191,6 +257,7 @@ def extract_address_components(text: str) -> Dict:
     phone_numbers = extract_phone_numbers(text)
     pincode = extract_pincode(text)
     full_address = extract_full_address(text)
+    street_address = extract_street_address(text)
     
     location_data = None
     if district and state:
@@ -202,14 +269,20 @@ def extract_address_components(text: str) -> Dict:
         time.sleep(1)
         location_data = geocode_with_nominatim(search_query)
     
-    return {
+    result = {
         'full_address': full_address,
+        'street_address': street_address,
         'district': district,
         'state': state,
         'pincode': pincode,
         'phone_numbers': phone_numbers,
         'location_data': location_data
     }
+    
+    # Format complete address
+    result['formatted_address'] = format_complete_address(result)
+    
+    return result
 
 # Streamlit UI
 st.set_page_config(page_title="Address & Location Extractor", page_icon="📍", layout="wide")
@@ -239,26 +312,37 @@ with tab1:
                 with col1:
                     st.subheader("📄 Extracted Information")
                     
-                    if result['full_address']:
-                        st.success(f"**Full Address:** {result['full_address']}")
+                    # Show formatted complete address
+                    if result['formatted_address']:
+                        st.success(f"**📍 Complete Address:**")
+                        st.info(result['formatted_address'])
                     
-                    if result['state']:
-                        st.success(f"**State:** {result['state']}")
-                    else:
-                        st.warning("State not found")
+                    # Show original full address
+                    if result['full_address']:
+                        with st.expander("📝 Original Address Text"):
+                            st.write(result['full_address'])
+                    
+                    # Show street address
+                    if result['street_address']:
+                        st.success(f"**🏠 Street Address:** {result['street_address']}")
                     
                     if result['district']:
-                        st.success(f"**District:** {result['district']}")
+                        st.success(f"**🏙️ District:** {result['district']}")
                     else:
                         st.warning("District not found")
                     
+                    if result['state']:
+                        st.success(f"**🗺️ State:** {result['state']}")
+                    else:
+                        st.warning("State not found")
+                    
                     if result['pincode']:
-                        st.success(f"**Pincode:** {result['pincode']}")
+                        st.success(f"**📮 Pincode:** {result['pincode']}")
                     else:
                         st.info("Pincode not found")
                     
                     if result['phone_numbers']:
-                        st.success(f"**Phone Numbers:** {', '.join(result['phone_numbers'])}")
+                        st.success(f"**📞 Phone Numbers:** {', '.join(result['phone_numbers'])}")
                     else:
                         st.info("No phone numbers found")
                 
@@ -311,9 +395,10 @@ with tab2:
                 
                 result_row = {
                     'Original_Text': text,
-                    'Full_Address': extracted['full_address'],
-                    'State': extracted['state'],
+                    'Formatted_Address': extracted['formatted_address'],
+                    'Street_Address': extracted['street_address'],
                     'District': extracted['district'],
+                    'State': extracted['state'],
                     'Pincode': extracted['pincode'],
                     'Phone_Numbers': ', '.join(extracted['phone_numbers']) if extracted['phone_numbers'] else None,
                     'Latitude': extracted['location_data']['latitude'] if extracted['location_data'] else None,
