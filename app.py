@@ -59,75 +59,100 @@ class ProgressTracker:
             return self.current
 
 def search_police_stations_optimized(district: str, state: str) -> List[Dict]:
-    """Optimized search using single comprehensive query"""
+    """Optimized search using multiple query strategies"""
     overpass_url = "http://overpass-api.de/api/interpreter"
     
-    # Single comprehensive query with multiple fallbacks
-    query = f"""
+    police_stations = []
+    seen_coords = set()
+    
+    # Strategy 1: Search by state area and district name in address
+    query1 = f"""
     [out:json][timeout:25];
+    area["name"="{state}"]["admin_level"="4"]->.state;
     (
-      // Direct district match in address
-      node["amenity"="police"]["addr:district"="{district}"]({{bbox}});
-      way["amenity"="police"]["addr:district"="{district}"]({{bbox}});
-      
-      // Fuzzy name match
-      node["amenity"="police"]["name"~"{district}",i]({{bbox}});
-      way["amenity"="police"]["name"~"{district}",i]({{bbox}});
-      
-      // Area-based search
-      area["name"="{district}"]->.a;
-      node["amenity"="police"](area.a);
-      way["amenity"="police"](area.a);
+      node["amenity"="police"]["addr:district"="{district}"](area.state);
+      way["amenity"="police"]["addr:district"="{district}"](area.state);
     );
-    out center 30;
+    out center 20;
     """
     
-    try:
-        response = requests.post(overpass_url, data={'data': query}, timeout=30)
-        
-        if response.status_code != 200:
-            return []
-        
-        data = response.json()
-        police_stations = []
-        seen_coords = set()
-        
-        for element in data.get('elements', []):
-            # Get coordinates
-            if element['type'] == 'node':
-                lat = element['lat']
-                lon = element['lon']
-            elif 'center' in element:
-                lat = element['center']['lat']
-                lon = element['center']['lon']
-            else:
+    # Strategy 2: Search by district area
+    query2 = f"""
+    [out:json][timeout:25];
+    area["name"="{district}"]->.district;
+    (
+      node["amenity"="police"](area.district);
+      way["amenity"="police"](area.district);
+    );
+    out center 15;
+    """
+    
+    # Strategy 3: Fuzzy search by district name in station name
+    query3 = f"""
+    [out:json][timeout:25];
+    area["name"="{state}"]["admin_level"="4"]->.state;
+    (
+      node["amenity"="police"]["name"~"{district}",i](area.state);
+      way["amenity"="police"]["name"~"{district}",i](area.state);
+    );
+    out center 10;
+    """
+    
+    queries = [query1, query2, query3]
+    
+    for query in queries:
+        try:
+            response = requests.post(overpass_url, data={'data': query}, timeout=30)
+            
+            if response.status_code != 200:
                 continue
             
-            # Check for duplicates
-            coord_key = (round(lat, 4), round(lon, 4))
-            if coord_key in seen_coords:
-                continue
-            seen_coords.add(coord_key)
+            data = response.json()
             
-            tags = element.get('tags', {})
+            for element in data.get('elements', []):
+                # Get coordinates
+                if element['type'] == 'node':
+                    lat = element['lat']
+                    lon = element['lon']
+                elif 'center' in element:
+                    lat = element['center']['lat']
+                    lon = element['center']['lon']
+                else:
+                    continue
+                
+                # Check for duplicates
+                coord_key = (round(lat, 4), round(lon, 4))
+                if coord_key in seen_coords:
+                    continue
+                seen_coords.add(coord_key)
+                
+                tags = element.get('tags', {})
+                
+                # Extract only required fields
+                station_info = {
+                    'name': tags.get('name', 'Unnamed Police Station'),
+                    'district': district,
+                    'state': state,
+                    'address': tags.get('addr:full') or tags.get('addr:street', '') or 'Not available',
+                    'phone': tags.get('phone') or tags.get('contact:phone', '') or 'Not available',
+                    'latitude': round(lat, 6),
+                    'longitude': round(lon, 6)
+                }
+                
+                police_stations.append(station_info)
             
-            # Extract only required fields
-            station_info = {
-                'name': tags.get('name', 'Unnamed Police Station'),
-                'district': district,
-                'state': state,
-                'address': tags.get('addr:full') or tags.get('addr:street', '') or 'Not available',
-                'phone': tags.get('phone') or tags.get('contact:phone', '') or 'Not available',
-                'latitude': round(lat, 6),
-                'longitude': round(lon, 6)
-            }
+            # Small delay between queries
+            if police_stations:
+                time.sleep(0.3)
             
-            police_stations.append(station_info)
-        
-        return police_stations[:20]  # Limit to 20 per district
-        
-    except Exception as e:
-        return []
+            # If we found enough, stop searching
+            if len(police_stations) >= 15:
+                break
+                
+        except Exception as e:
+            continue
+    
+    return police_stations[:25]  # Return up to 25 per district
 
 def search_single_district_fast(state: str, district: str, tracker: ProgressTracker):
     """Fast search with single attempt"""
@@ -205,7 +230,7 @@ def fetch_all_districts_fast(max_workers: int = 15):
                 """)
                 
                 # Minimal delay for API respect
-                time.sleep(0.1)
+                time.sleep(0.2)
                 
             except Exception as e:
                 state, district = future_to_task[future]
@@ -243,7 +268,7 @@ with col2:
     total_districts = sum(len(districts) for districts in INDIA_DISTRICTS.values())
     st.metric("Total Districts", total_districts)
 with col3:
-    max_workers = st.slider("Parallel Workers", 5, 20, 15, help="Higher = faster, but may hit rate limits")
+    max_workers = st.slider("Parallel Workers", 3, 12, 8, help="Higher = faster, but may hit rate limits. Recommended: 6-8")
 
 if st.button("🚀 Generate Complete Database", type="primary", use_container_width=True):
     st.warning("⏳ Starting fast search... Estimated time: 8-12 minutes")
