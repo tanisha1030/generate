@@ -63,69 +63,123 @@ def search_police_stations(district: str, state: str, limit: int = 10) -> List[D
     """Search for police stations in a district using Overpass API (OpenStreetMap)"""
     overpass_url = "http://overpass-api.de/api/interpreter"
     
-    # Improved query - search by district name and state
-    query = f"""
-    [out:json][timeout:25];
-    (
-      node["amenity"="police"]["addr:district"="{district}"](area:3600304716);
-      way["amenity"="police"]["addr:district"="{district}"](area:3600304716);
-      node["amenity"="police"](around:50000);
-      way["amenity"="police"](around:50000);
-    );
-    out center {limit};
-    """
+    # Multiple search strategies to maximize coverage
+    queries = [
+        # Strategy 1: Search by district name in tags
+        f"""
+        [out:json][timeout:30];
+        area["name"="{state}"]["admin_level"="4"]->.state;
+        (
+          node["amenity"="police"]["addr:district"="{district}"](area.state);
+          way["amenity"="police"]["addr:district"="{district}"](area.state);
+          relation["amenity"="police"]["addr:district"="{district}"](area.state);
+        );
+        out center {limit * 2};
+        """,
+        # Strategy 2: Search by district boundary
+        f"""
+        [out:json][timeout:30];
+        area["name"="{district}"]["admin_level"~"5|6|7"]->.district;
+        (
+          node["amenity"="police"](area.district);
+          way["amenity"="police"](area.district);
+          relation["amenity"="police"](area.district);
+        );
+        out center {limit * 2};
+        """,
+        # Strategy 3: Fuzzy search with district and state names
+        f"""
+        [out:json][timeout:30];
+        (
+          node["amenity"="police"]["name"~"{district}",i];
+          way["amenity"="police"]["name"~"{district}",i];
+          node["amenity"="police"]["addr:city"~"{district}",i];
+          way["amenity"="police"]["addr:city"~"{district}",i];
+        );
+        out center {limit};
+        """
+    ]
     
-    try:
-        response = requests.post(overpass_url, data={'data': query}, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        
-        police_stations = []
-        seen_coords = set()  # Avoid duplicates
-        
-        for element in data.get('elements', []):
-            # Get coordinates
-            if element['type'] == 'node':
-                lat = element['lat']
-                lon = element['lon']
-            elif 'center' in element:
-                lat = element['center']['lat']
-                lon = element['center']['lon']
-            else:
-                continue
-            
-            # Check for duplicates
-            coord_key = (round(lat, 5), round(lon, 5))
-            if coord_key in seen_coords:
-                continue
-            seen_coords.add(coord_key)
-            
-            tags = element.get('tags', {})
-            
-            # Extract police station info
-            station_info = {
-                'name': tags.get('name', 'Unnamed Police Station'),
-                'latitude': lat,
-                'longitude': lon,
-                'address': tags.get('addr:full') or tags.get('addr:street', ''),
-                'city': tags.get('addr:city', ''),
-                'district': tags.get('addr:district', district),
-                'state': state,
-                'phone': tags.get('phone') or tags.get('contact:phone', ''),
-                'police_type': tags.get('police', 'Unknown'),
-                'operator': tags.get('operator', '')
-            }
-            
-            police_stations.append(station_info)
-        
-        return police_stations
+    all_police_stations = []
+    seen_coords = set()  # Avoid duplicates across all queries
     
-    except Exception as e:
-        return []
+    for query_idx, query in enumerate(queries):
+        try:
+            response = requests.post(overpass_url, data={'data': query}, timeout=35)
+            
+            # If we hit rate limits or errors, try next strategy
+            if response.status_code != 200:
+                time.sleep(1)
+                continue
+                
+            data = response.json()
+            
+            for element in data.get('elements', []):
+                # Get coordinates
+                if element['type'] == 'node':
+                    lat = element['lat']
+                    lon = element['lon']
+                elif 'center' in element:
+                    lat = element['center']['lat']
+                    lon = element['center']['lon']
+                else:
+                    continue
+                
+                # Check for duplicates
+                coord_key = (round(lat, 5), round(lon, 5))
+                if coord_key in seen_coords:
+                    continue
+                seen_coords.add(coord_key)
+                
+                tags = element.get('tags', {})
+                
+                # Extract police station info
+                station_info = {
+                    'name': tags.get('name', 'Unnamed Police Station'),
+                    'latitude': lat,
+                    'longitude': lon,
+                    'address': tags.get('addr:full') or tags.get('addr:street', ''),
+                    'city': tags.get('addr:city', ''),
+                    'district': tags.get('addr:district', district),
+                    'state': state,
+                    'phone': tags.get('phone') or tags.get('contact:phone', ''),
+                    'police_type': tags.get('police', 'Unknown'),
+                    'operator': tags.get('operator', '')
+                }
+                
+                all_police_stations.append(station_info)
+            
+            # If we found enough stations, break early
+            if len(all_police_stations) >= limit:
+                break
+                
+            # Small delay between queries to respect API
+            time.sleep(0.5)
+            
+        except Exception as e:
+            # Try next query strategy
+            time.sleep(1)
+            continue
+    
+    # Return up to the limit
+    return all_police_stations[:limit * 2]
 
 def search_single_district(state: str, district: str, limit: int, tracker: ProgressTracker):
     """Search a single district (for parallel processing)"""
-    stations = search_police_stations(district, state, limit)
+    max_retries = 2
+    stations = []
+    
+    for attempt in range(max_retries):
+        try:
+            stations = search_police_stations(district, state, limit)
+            if stations or attempt == max_retries - 1:
+                break
+            time.sleep(1)  # Wait before retry
+        except Exception as e:
+            if attempt == max_retries - 1:
+                stations = []
+            time.sleep(1)
+    
     current = tracker.increment()
     
     return {
@@ -156,12 +210,18 @@ def fetch_all_police_stations_parallel(max_workers: int = 10):
     
     progress_bar = st.progress(0)
     status_text = st.empty()
+    stats_container = st.empty()
+    
+    completed = 0
+    found_stations = 0
+    with_data = 0
+    without_data = 0
     
     # Use ThreadPoolExecutor for parallel API calls
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
         future_to_task = {
-            executor.submit(search_single_district, state, district, 10, tracker): (state, district)
+            executor.submit(search_single_district, state, district, 15, tracker): (state, district)
             for state, district in tasks
         }
         
@@ -173,23 +233,40 @@ def fetch_all_police_stations_parallel(max_workers: int = 10):
                 district = result['district']
                 all_data[state][district] = result['data']
                 
-                # Update progress
-                progress = result['progress'] / total_districts
-                progress_bar.progress(progress)
-                status_text.text(f"Completed: {district}, {state} ({result['progress']}/{total_districts})")
+                # Update statistics
+                completed += 1
+                if result['data']['total_found'] > 0:
+                    with_data += 1
+                    found_stations += result['data']['total_found']
+                else:
+                    without_data += 1
                 
-                # Small delay to respect API limits
-                time.sleep(0.1)
+                # Update progress
+                progress = completed / total_districts
+                progress_bar.progress(progress)
+                status_text.text(f"Processing: {district}, {state} ({completed}/{total_districts})")
+                
+                # Show live statistics
+                stats_container.markdown(f"""
+                **Live Statistics:**
+                - ✅ Completed: {completed}/{total_districts} districts
+                - 🚔 Police Stations Found: {found_stations}
+                - 📊 Districts with Data: {with_data}
+                - ⚠️ Districts without Data: {without_data}
+                """)
+                
+                # Respect API rate limits
+                time.sleep(0.15)
                 
             except Exception as e:
                 state, district = future_to_task[future]
-                st.warning(f"Error processing {district}, {state}: {str(e)}")
                 all_data[state][district] = {
                     "district": district,
                     "state": state,
                     "police_stations": [],
                     "total_found": 0
                 }
+                without_data += 1
     
     status_text.text("✅ Search complete!")
     return all_data
@@ -357,11 +434,14 @@ with tab3:
     This will search for police stations in all 787+ districts across India.
     
     ⚠️ **Important Notes:**
-    - **OPTIMIZED:** Uses parallel processing to speed up data collection
-    - Estimated time: **10-15 minutes** (instead of 30-45 minutes)
-    - Uses 10 concurrent API requests for faster processing
+    - **OPTIMIZED:** Uses parallel processing with multiple search strategies
+    - Uses 3 different search methods per district for better coverage
+    - Estimated time: **15-25 minutes** (comprehensive search)
+    - Uses configurable concurrent API requests
+    - Includes retry mechanism for failed requests
     - Please be patient and do not refresh the page
-    - Some districts may have limited data in OpenStreetMap
+    - **Note:** OpenStreetMap data may be incomplete for some districts
+    - Rural/remote areas may have less data coverage
     """)
     
     col1, col2, col3 = st.columns(3)
@@ -372,10 +452,10 @@ with tab3:
         total_districts = sum(len(districts) for districts in INDIA_DISTRICTS.values())
         st.metric("Total Districts", total_districts)
     with col3:
-        max_workers = st.slider("Parallel Workers", 5, 20, 10, help="More workers = faster but higher API load")
+        max_workers = st.slider("Parallel Workers", 3, 10, 5, help="More workers = faster but higher API load. Recommended: 5-7")
     
     if st.button("🚀 Start Generating Police Station Data", type="primary", key="generate_all"):
-        st.warning("⏳ This will take 10-15 minutes. Please don't close this window.")
+        st.warning("⏳ This will take 15-25 minutes. Please don't close this window.")
         
         start_time = time.time()
         all_police_data = fetch_all_police_stations_parallel(max_workers=max_workers)
@@ -519,7 +599,8 @@ with st.sidebar:
     - 📞 Contact information when available
     - 📊 Generate complete database
     - 💾 Export to CSV/JSON
-    - ⚡ **Parallel processing for speed**
+    - ⚡ **3 search strategies per district**
+    - 🔄 **Automatic retry mechanism**
     
     ### Coverage:
     - All 787+ districts across India
@@ -527,21 +608,26 @@ with st.sidebar:
     
     ### Performance Optimizations:
     - Multi-threaded API requests
-    - 10x faster than sequential processing
-    - Configurable worker threads
-    - Duplicate removal
-    - Smart error handling
+    - Multiple search strategies:
+      1. District name in address tags
+      2. Geographic boundary search
+      3. Fuzzy name matching
+    - Smart duplicate removal
+    - Automatic retry on failures
+    - Live progress tracking
     
     ### Data Source:
     - OpenStreetMap (OSM) database
     - Community-contributed data
-    - May not be 100% complete
+    - Coverage varies by region
+    - Better data in urban areas
     
     ### Tips:
-    - Data availability varies by district
-    - Urban areas have better coverage
+    - Use 5-7 parallel workers for optimal speed
+    - Lower workers = more stable, higher = faster
+    - Data completeness varies by district
     - You can contribute to OSM to improve data
-    - Increase workers for faster processing (but respect API limits)
+    - The system tries 3 different search methods per district
     """)
     
     st.markdown("---")
@@ -562,3 +648,16 @@ with st.sidebar:
     st.caption("Powered by OpenStreetMap Overpass API")
     st.caption("⚠️ Please respect API usage policies")
     st.caption("Data © OpenStreetMap contributors")
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: gray; padding: 20px;'>
+    <p>🚔 Police Station Finder for India | Data from OpenStreetMap</p>
+    <p>Made with ❤️ using Streamlit | Open Source Data</p>
+    <p style='font-size: 0.8em;'>
+        <strong>Disclaimer:</strong> This data is sourced from OpenStreetMap and may not be 100% complete or up-to-date. 
+        Always verify critical information with official sources.
+    </p>
+</div>
+""", unsafe_allow_html=True)
