@@ -42,9 +42,10 @@ INDIA_DISTRICTS = {
     "Delhi": ["Central Delhi", "East Delhi", "New Delhi", "North Delhi", "North East Delhi", "North West Delhi", "Shahdara", "South Delhi", "South East Delhi", "South West Delhi", "West Delhi"],
     "Jammu and Kashmir": ["Anantnag", "Bandipora", "Baramulla", "Budgam", "Doda", "Ganderbal", "Jammu", "Kathua", "Kishtwar", "Kulgam", "Kupwara", "Poonch", "Pulwama", "Rajouri", "Ramban", "Reasi", "Samba", "Shopian", "Srinagar", "Udhampur"],
     "Ladakh": ["Kargil", "Leh"],
-    "Lakshadweep": ["Agatti", "Amini", "Andrott", "Kadmath", "Kavaratti", "Minicoy", "Chetlat", "Bitra"],
+    "Lakshadweep": ["Agatti", "Amini", "Andrott", "Kadmath", "Kavaratti", "Minicoy", "Chetlat", "Bitra"],
     "Puducherry": ["Karaikal", "Mahe", "Puducherry", "Yanam"]
 }
+
 def geocode_with_nominatim(query: str) -> Optional[Dict]:
     """Geocode address using OpenStreetMap Nominatim API"""
     base_url = "https://nominatim.openstreetmap.org/search"
