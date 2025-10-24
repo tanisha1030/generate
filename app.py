@@ -1,8 +1,7 @@
 import streamlit as st
-import re
 import requests
 import time
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 import pandas as pd
 import json
 
@@ -12,7 +11,7 @@ INDIA_DISTRICTS = {
     "Arunachal Pradesh": ["Anjaw", "Changlang", "Dibang Valley", "East Kameng", "East Siang", "Kamle", "Kra Daadi", "Kurung Kumey", "Lepa Rada", "Lohit", "Longding", "Lower Dibang Valley", "Lower Siang", "Lower Subansiri", "Namsai", "Pakke Kessang", "Papum Pare", "Shi Yomi", "Siang", "Tawang", "Tirap", "Upper Siang", "Upper Subansiri", "West Kameng", "West Siang", "Bichom", "Keyi Panyor"],
     "Assam": ["Bajali", "Baksa", "Barpeta", "Biswanath", "Bongaigaon", "Cachar", "Charaideo", "Chirang", "Darrang", "Dhemaji", "Dhubri", "Dima Hasao", "Dibrugarh", "Goalpara", "Golaghat", "Hailakandi", "Hojai", "Jorhat", "Kamrup", "Kamrup Metropolitan", "Karbi Anglong", "Karimganj", "Kokrajhar", "Lakhimpur", "Majuli", "Morigaon", "Nagaon", "Nalbari", "Sivasagar", "Sonitpur", "South Salmara-Mankachar", "Tinsukia", "Udalguri", "West Karbi Anglong"],
     "Bihar": ["Araria", "Arwal", "Aurangabad", "Banka", "Begusarai", "Bhagalpur", "Bhojpur", "Buxar", "Darbhanga", "East Champaran", "Gaya", "Gopalganj", "Jamui", "Jehanabad", "Kaimur", "Katihar", "Khagaria", "Kishanganj", "Lakhisarai", "Madhepura", "Madhubani", "Munger", "Muzaffarpur", "Nalanda", "Nawada", "Patna", "Purnia", "Rohtas", "Saharsa", "Samastipur", "Saran", "Sheikhpura", "Sheohar", "Sitamarhi", "Siwan", "Supaul", "Vaishali", "West Champaran"],
-    "Chhattisgarh": ["Balod", "Baloda Bazar", "Balrampur", "Bastar", "Bemetara", "Bijapur", "Bilaspur", "Dantewada", "Dhamtari", "Durg", "Gariaband", "Gaurela-Pendra-Marwahi", "Janjgir-Champa", "Jashpur", "Kabirdham", "Kanker", "Kondagaon", "Korba", "Koriya", "Mahasamund", "Manendragarh-Chirmiri-Bharatpur", "Mohla-Manpur-Ambagarh Chowki", "Mungeli", "Narayanpur", "Raigarh", "Raipur", "Rajnandgaon", "Sakti", "Sarangarh-Bilaigarh", "Sukma", "Surajpur", "Surguja", "Khairagarh-Chhuikhadan-Gandai", "Bastar"],
+    "Chhattisgarh": ["Balod", "Baloda Bazar", "Balrampur", "Bastar", "Bemetara", "Bijapur", "Bilaspur", "Dantewada", "Dhamtari", "Durg", "Gariaband", "Gaurela-Pendra-Marwahi", "Janjgir-Champa", "Jashpur", "Kabirdham", "Kanker", "Kondagaon", "Korba", "Koriya", "Mahasamund", "Manendragarh-Chirmiri-Bharatpur", "Mohla-Manpur-Ambagarh Chowki", "Mungeli", "Narayanpur", "Raigarh", "Raipur", "Rajnandgaon", "Sakti", "Sarangarh-Bilaigarh", "Sukma", "Surajpur", "Surguja", "Khairagarh-Chhuikhadan-Gandai"],
     "Goa": ["North Goa", "South Goa"],
     "Gujarat": ["Ahmedabad", "Amreli", "Anand", "Aravalli", "Banaskantha", "Bharuch", "Bhavnagar", "Botad", "Chhota Udaipur", "Dahod", "Devbhoomi Dwarka", "Gandhinagar", "Gir Somnath", "Jamnagar", "Junagadh", "Kheda", "Kutch", "Mahisagar", "Mehsana", "Morbi", "Narmada", "Navsari", "Panchmahal", "Patan", "Porbandar", "Rajkot", "Sabarkantha", "Surat", "Surendranagar", "Tapi", "Vadodara", "Valsad"],
     "Haryana": ["Ambala", "Bhiwani", "Charkhi Dadri", "Faridabad", "Fatehabad", "Gurugram", "Hisar", "Jhajjar", "Jind", "Kaithal", "Karnal", "Kurukshetra", "Mahendragarh", "Nuh", "Palwal", "Panchkula", "Panipat", "Rewari", "Rohtak", "Sirsa", "Sonipat", "Yamunanagar"],
@@ -46,42 +45,65 @@ INDIA_DISTRICTS = {
     "Puducherry": ["Karaikal", "Mahe", "Puducherry", "Yanam"]
 }
 
-def geocode_with_nominatim(query: str) -> Optional[Dict]:
-    """Geocode address using OpenStreetMap Nominatim API"""
-    base_url = "https://nominatim.openstreetmap.org/search"
+def search_police_stations(district: str, state: str, limit: int = 10) -> List[Dict]:
+    """Search for police stations in a district using Overpass API (OpenStreetMap)"""
+    overpass_url = "http://overpass-api.de/api/interpreter"
     
-    params = {
-        'q': query,
-        'format': 'json',
-        'limit': 1,
-        'countrycodes': 'in',
-        'addressdetails': 1
-    }
-    
-    headers = {
-        'User-Agent': 'AddressExtractorApp/1.0'
-    }
+    # Overpass QL query to find police stations
+    query = f"""
+    [out:json][timeout:25];
+    area["name"="{state}"]["admin_level"="4"]->.state;
+    (
+      node["amenity"="police"](area.state);
+      way["amenity"="police"](area.state);
+      relation["amenity"="police"](area.state);
+    );
+    out center {limit};
+    """
     
     try:
-        response = requests.get(base_url, params=params, headers=headers, timeout=10)
+        response = requests.post(overpass_url, data={'data': query}, timeout=30)
         response.raise_for_status()
-        results = response.json()
+        data = response.json()
         
-        if results:
-            result = results[0]
-            return {
-                'latitude': float(result['lat']),
-                'longitude': float(result['lon']),
-                'display_name': result['display_name'],
-                'address': result.get('address', {})
+        police_stations = []
+        for element in data.get('elements', []):
+            # Get coordinates
+            if element['type'] == 'node':
+                lat = element['lat']
+                lon = element['lon']
+            elif 'center' in element:
+                lat = element['center']['lat']
+                lon = element['center']['lon']
+            else:
+                continue
+            
+            tags = element.get('tags', {})
+            
+            # Extract police station info
+            station_info = {
+                'name': tags.get('name', 'Unnamed Police Station'),
+                'latitude': lat,
+                'longitude': lon,
+                'address': tags.get('addr:full') or tags.get('addr:street', ''),
+                'city': tags.get('addr:city', ''),
+                'district': tags.get('addr:district', district),
+                'state': state,
+                'phone': tags.get('phone') or tags.get('contact:phone', ''),
+                'police_type': tags.get('police', 'Unknown'),
+                'operator': tags.get('operator', '')
             }
-    except Exception as e:
-        return None
+            
+            police_stations.append(station_info)
+        
+        return police_stations
     
-    return None
+    except Exception as e:
+        st.error(f"Error fetching police stations: {str(e)}")
+        return []
 
-def fetch_all_districts_data():
-    """Fetch geocoding data for all districts"""
+def fetch_all_police_stations():
+    """Fetch police stations for all districts"""
     all_data = {}
     total_districts = sum(len(districts) for districts in INDIA_DISTRICTS.values())
     
@@ -94,345 +116,190 @@ def fetch_all_districts_data():
         
         for district in districts:
             current += 1
-            status_text.text(f"Processing: {district}, {state} ({current}/{total_districts})")
+            status_text.text(f"Searching police stations in: {district}, {state} ({current}/{total_districts})")
             
-            # Create search query
-            search_query = f"{district}, {state}, India"
+            # Search for police stations
+            stations = search_police_stations(district, state, limit=10)
             
-            # Geocode
-            location_data = geocode_with_nominatim(search_query)
-            
-            if location_data:
-                all_data[state][district] = {
-                    "district": district,
-                    "state": state,
-                    "latitude": location_data['latitude'],
-                    "longitude": location_data['longitude'],
-                    "display_name": location_data['display_name'],
-                    "address": location_data['address']
-                }
-            else:
-                all_data[state][district] = {
-                    "district": district,
-                    "state": state,
-                    "latitude": None,
-                    "longitude": None,
-                    "display_name": None,
-                    "address": None,
-                    "error": "Geocoding failed"
-                }
+            all_data[state][district] = {
+                "district": district,
+                "state": state,
+                "police_stations": stations,
+                "total_found": len(stations)
+            }
             
             progress_bar.progress(current / total_districts)
-            time.sleep(1.5)  # Rate limiting for Nominatim API
+            time.sleep(2)  # Rate limiting for Overpass API
     
-    status_text.text("✅ Processing complete!")
+    status_text.text("✅ Search complete!")
     return all_data
 
-def extract_phone_numbers(text: str) -> List[str]:
-    """Extract Indian phone numbers from text"""
-    patterns = [
-        r'\+91[-\s]?\d{10}',
-        r'\b\d{10}\b',
-        r'\b\d{5}[-\s]?\d{5}\b',
-        r'\b\d{3}[-\s]?\d{3}[-\s]?\d{4}\b',
-    ]
-    
-    phone_numbers = []
-    for pattern in patterns:
-        matches = re.findall(pattern, text)
-        phone_numbers.extend(matches)
-    
-    cleaned = []
-    for num in phone_numbers:
-        cleaned_num = re.sub(r'[-\s]', '', num)
-        if len(cleaned_num) == 10 or (len(cleaned_num) == 12 and cleaned_num.startswith('91')):
-            if cleaned_num not in cleaned:
-                cleaned.append(cleaned_num)
-    
-    return cleaned
-
-def extract_pincode(text: str) -> Optional[str]:
-    """Extract Indian pincode from text"""
-    pincode_pattern = r'\b[1-9]\d{5}\b'
-    matches = re.findall(pincode_pattern, text)
-    return matches[0] if matches else None
-
-def find_district_and_state(text: str) -> Tuple[Optional[str], Optional[str]]:
-    """Find district and state from text using the districts dictionary"""
-    text_lower = text.lower()
-    
-    for state, districts in INDIA_DISTRICTS.items():
-        if state.lower() in text_lower:
-            for district in districts:
-                if district.lower() in text_lower:
-                    return district, state
-            return None, state
-        
-        for district in districts:
-            if district.lower() in text_lower:
-                return district, state
-    
-    return None, None
-
-def extract_street_address(text: str) -> Optional[str]:
-    """Extract street address components from text"""
-    # Remove phone numbers first to avoid confusion
-    text_clean = text
-    for pattern in [r'\+91[-\s]?\d{10}', r'\b\d{10}\b', r'\b\d{5}[-\s]?\d{5}\b']:
-        text_clean = re.sub(pattern, '', text_clean)
-    
-    # Common address keywords that indicate start of address
-    address_keywords = [
-        'address:', 'addr:', 'location:', 'office:', 'shop:', 'building:',
-        'flat', 'floor', 'plot', 'house', 'street', 'road', 'lane', 'avenue',
-        'sector', 'block', 'phase', 'near', 'opposite', 'behind'
-    ]
-    
-    # Try to find address section
-    lines = text_clean.split('\n')
-    address_lines = []
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        
-        # Check if line contains address-like content
-        line_lower = line.lower()
-        has_keyword = any(keyword in line_lower for keyword in address_keywords)
-        has_number = bool(re.search(r'\d', line))
-        
-        if has_keyword or has_number:
-            # Clean the line
-            for prefix in ['address:', 'addr:', 'location:', 'office:']:
-                if line_lower.startswith(prefix):
-                    line = line[len(prefix):].strip()
-            address_lines.append(line)
-    
-    if address_lines:
-        return ', '.join(address_lines)
-    
-    # If no structured address found, return cleaned text
-    return text_clean.strip()
-
-def format_complete_address(result: Dict) -> str:
-    """Format a complete address from extracted components"""
-    address_parts = []
-    
-    # Add street address if available
-    if result.get('street_address'):
-        address_parts.append(result['street_address'])
-    
-    # Add district
-    if result.get('district'):
-        address_parts.append(result['district'])
-    
-    # Add state
-    if result.get('state'):
-        address_parts.append(result['state'])
-    
-    # Add pincode
-    if result.get('pincode'):
-        address_parts.append(result['pincode'])
-    
-    # Add country
-    address_parts.append("India")
-    
-    return ', '.join(address_parts)
-
-def extract_full_address(text: str) -> str:
-    """Extract the full address from text by cleaning and formatting"""
-    # Remove extra whitespace and newlines
-    cleaned = re.sub(r'\s+', ' ', text.strip())
-    # Remove common prefixes
-    prefixes = ['address:', 'location:', 'office:', 'addr:']
-    for prefix in prefixes:
-        if cleaned.lower().startswith(prefix):
-            cleaned = cleaned[len(prefix):].strip()
-    return cleaned
-
-def extract_address_components(text: str) -> Dict:
-    """Extract all address components from text"""
-    district, state = find_district_and_state(text)
-    phone_numbers = extract_phone_numbers(text)
-    pincode = extract_pincode(text)
-    full_address = extract_full_address(text)
-    street_address = extract_street_address(text)
-    
-    location_data = None
-    if district and state:
-        search_query = f"{district}, {state}, India"
-        time.sleep(1)
-        location_data = geocode_with_nominatim(search_query)
-    elif state:
-        search_query = f"{state}, India"
-        time.sleep(1)
-        location_data = geocode_with_nominatim(search_query)
-    
-    result = {
-        'full_address': full_address,
-        'street_address': street_address,
-        'district': district,
-        'state': state,
-        'pincode': pincode,
-        'phone_numbers': phone_numbers,
-        'location_data': location_data
-    }
-    
-    # Format complete address
-    result['formatted_address'] = format_complete_address(result)
-    
-    return result
-
 # Streamlit UI
-st.set_page_config(page_title="Address & Location Extractor", page_icon="📍", layout="wide")
+st.set_page_config(page_title="Police Station Finder", page_icon="🚔", layout="wide")
 
-st.title("📍 Address & Location Extractor")
-st.markdown("Extract address details, phone numbers, and coordinates using OpenStreetMap")
+st.title("🚔 Police Station Finder for Indian Districts")
+st.markdown("Find police stations across all districts in India using OpenStreetMap data")
 
 # Tabs for different functionalities
-tab1, tab2, tab3 = st.tabs(["📝 Text Input", "📊 Bulk Processing", "🗺️ Generate All Districts Data"])
+tab1, tab2, tab3 = st.tabs(["🔍 Search by District", "📊 View All Data", "🗺️ Generate Complete Database"])
 
 with tab1:
-    st.subheader("Enter Text to Extract Information")
+    st.subheader("Search Police Stations by District")
     
-    text_input = st.text_area(
-        "Paste address or text containing location information:",
-        height=150,
-        placeholder="Example: Office located at MG Road, Bangalore, Karnataka 560001. Contact: 9876543210"
-    )
+    col1, col2 = st.columns(2)
     
-    if st.button("Extract Information", type="primary", key="extract_single"):
-        if text_input.strip():
-            with st.spinner("Extracting information..."):
-                result = extract_address_components(text_input)
+    with col1:
+        selected_state = st.selectbox("Select State/UT:", sorted(INDIA_DISTRICTS.keys()))
+    
+    with col2:
+        selected_district = st.selectbox("Select District:", sorted(INDIA_DISTRICTS[selected_state]))
+    
+    num_results = st.slider("Number of results to fetch:", 5, 50, 10)
+    
+    if st.button("🔍 Search Police Stations", type="primary", key="search_single"):
+        with st.spinner(f"Searching for police stations in {selected_district}, {selected_state}..."):
+            stations = search_police_stations(selected_district, selected_state, limit=num_results)
+            
+            if stations:
+                st.success(f"✅ Found {len(stations)} police station(s)")
                 
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.subheader("📄 Extracted Information")
-                    
-                    # Show formatted complete address
-                    if result['formatted_address']:
-                        st.success(f"**📍 Complete Address:**")
-                        st.info(result['formatted_address'])
-                    
-                    # Show original full address
-                    if result['full_address']:
-                        with st.expander("📝 Original Address Text"):
-                            st.write(result['full_address'])
-                    
-                    # Show street address
-                    if result['street_address']:
-                        st.success(f"**🏠 Street Address:** {result['street_address']}")
-                    
-                    if result['district']:
-                        st.success(f"**🏙️ District:** {result['district']}")
-                    else:
-                        st.warning("District not found")
-                    
-                    if result['state']:
-                        st.success(f"**🗺️ State:** {result['state']}")
-                    else:
-                        st.warning("State not found")
-                    
-                    if result['pincode']:
-                        st.success(f"**📮 Pincode:** {result['pincode']}")
-                    else:
-                        st.info("Pincode not found")
-                    
-                    if result['phone_numbers']:
-                        st.success(f"**📞 Phone Numbers:** {', '.join(result['phone_numbers'])}")
-                    else:
-                        st.info("No phone numbers found")
-                
-                with col2:
-                    st.subheader("🗺️ Location Data")
-                    
-                    if result['location_data']:
-                        loc = result['location_data']
-                        st.success(f"**Latitude:** {loc['latitude']}")
-                        st.success(f"**Longitude:** {loc['longitude']}")
-                        st.info(f"**Full Address:** {loc['display_name']}")
+                # Display in cards
+                for idx, station in enumerate(stations, 1):
+                    with st.expander(f"🚔 {idx}. {station['name']}", expanded=(idx==1)):
+                        col1, col2 = st.columns([2, 1])
                         
-                        df_map = pd.DataFrame({
-                            'lat': [loc['latitude']],
-                            'lon': [loc['longitude']]
-                        })
-                        st.map(df_map, zoom=12)
+                        with col1:
+                            st.write(f"**📍 Address:** {station['address'] or 'Not available'}")
+                            st.write(f"**🏙️ City:** {station['city'] or 'Not available'}")
+                            st.write(f"**📍 District:** {station['district']}")
+                            st.write(f"**🗺️ State:** {station['state']}")
+                            st.write(f"**📞 Phone:** {station['phone'] or 'Not available'}")
+                            st.write(f"**🚨 Type:** {station['police_type']}")
+                            if station['operator']:
+                                st.write(f"**👮 Operator:** {station['operator']}")
                         
-                        osm_link = f"https://www.openstreetmap.org/?mlat={loc['latitude']}&mlon={loc['longitude']}&zoom=15"
-                        st.markdown(f"[📍 View on OpenStreetMap]({osm_link})")
-                    else:
-                        st.warning("Could not geocode the location.")
-        else:
-            st.warning("Please enter some text.")
+                        with col2:
+                            st.write(f"**Coordinates:**")
+                            st.write(f"Lat: {station['latitude']:.6f}")
+                            st.write(f"Lon: {station['longitude']:.6f}")
+                            
+                            osm_link = f"https://www.openstreetmap.org/?mlat={station['latitude']}&mlon={station['longitude']}&zoom=17"
+                            st.markdown(f"[📍 View on Map]({osm_link})")
+                            
+                            gmaps_link = f"https://www.google.com/maps?q={station['latitude']},{station['longitude']}"
+                            st.markdown(f"[🗺️ Google Maps]({gmaps_link})")
+                
+                # Show on map
+                st.subheader("🗺️ Map View")
+                map_df = pd.DataFrame([
+                    {'lat': s['latitude'], 'lon': s['longitude'], 'name': s['name']}
+                    for s in stations
+                ])
+                st.map(map_df, zoom=10)
+                
+                # Download as CSV
+                st.subheader("💾 Download Data")
+                csv_data = pd.DataFrame(stations).to_csv(index=False)
+                st.download_button(
+                    label="📥 Download as CSV",
+                    data=csv_data,
+                    file_name=f"police_stations_{selected_district}_{selected_state}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.warning("⚠️ No police stations found in OpenStreetMap database for this district.")
+                st.info("💡 Try searching for a different district or the data might not be available in OSM.")
 
 with tab2:
-    st.subheader("Bulk Processing from CSV")
-    st.info("Upload a CSV file with a column containing addresses or text.")
+    st.subheader("📊 View Previously Generated Data")
     
-    uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
-    
-    if uploaded_file:
-        df = pd.read_csv(uploaded_file)
-        st.write("Preview of uploaded data:")
-        st.dataframe(df.head())
+    if 'police_data' in st.session_state:
+        data = st.session_state['police_data']
         
-        columns = df.columns.tolist()
-        text_column = st.selectbox("Select the column containing address/text:", columns)
+        # Statistics
+        total_districts = sum(len(districts) for districts in data.values())
+        total_stations = sum(
+            district_data['total_found'] 
+            for state_data in data.values() 
+            for district_data in state_data.values()
+        )
         
-        if st.button("Process All Rows", type="primary", key="process_bulk"):
-            results = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("📍 Total Districts", total_districts)
+        with col2:
+            st.metric("🚔 Total Police Stations", total_stations)
+        with col3:
+            avg_per_district = total_stations / total_districts if total_districts > 0 else 0
+            st.metric("📊 Avg per District", f"{avg_per_district:.1f}")
+        
+        # State-wise breakdown
+        st.subheader("📈 State-wise Breakdown")
+        state_stats = []
+        for state, districts in data.items():
+            state_total = sum(d['total_found'] for d in districts.values())
+            state_stats.append({
+                'State': state,
+                'Districts': len(districts),
+                'Police Stations': state_total
+            })
+        
+        stats_df = pd.DataFrame(state_stats).sort_values('Police Stations', ascending=False)
+        st.dataframe(stats_df, use_container_width=True)
+        
+        # Flatten data for CSV
+        st.subheader("💾 Download Complete Data")
+        flat_data = []
+        for state, districts in data.items():
+            for district, district_data in districts.items():
+                for station in district_data['police_stations']:
+                    flat_data.append({
+                        'State': state,
+                        'District': district,
+                        'Station_Name': station['name'],
+                        'Address': station['address'],
+                        'City': station['city'],
+                        'Phone': station['phone'],
+                        'Police_Type': station['police_type'],
+                        'Operator': station['operator'],
+                        'Latitude': station['latitude'],
+                        'Longitude': station['longitude']
+                    })
+        
+        if flat_data:
+            flat_df = pd.DataFrame(flat_data)
             
-            for idx, row in df.iterrows():
-                status_text.text(f"Processing row {idx + 1} of {len(df)}...")
-                text = str(row[text_column])
-                
-                extracted = extract_address_components(text)
-                
-                result_row = {
-                    'Original_Text': text,
-                    'Formatted_Address': extracted['formatted_address'],
-                    'Street_Address': extracted['street_address'],
-                    'District': extracted['district'],
-                    'State': extracted['state'],
-                    'Pincode': extracted['pincode'],
-                    'Phone_Numbers': ', '.join(extracted['phone_numbers']) if extracted['phone_numbers'] else None,
-                    'Latitude': extracted['location_data']['latitude'] if extracted['location_data'] else None,
-                    'Longitude': extracted['location_data']['longitude'] if extracted['location_data'] else None,
-                    'Geocoded_Address': extracted['location_data']['display_name'] if extracted['location_data'] else None
-                }
-                results.append(result_row)
-                
-                progress_bar.progress((idx + 1) / len(df))
-                time.sleep(1.5)
+            col1, col2 = st.columns(2)
+            with col1:
+                csv_data = flat_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download All Stations (CSV)",
+                    data=csv_data,
+                    file_name="all_police_stations_india.csv",
+                    mime="text/csv"
+                )
             
-            status_text.text("Processing complete!")
-            
-            results_df = pd.DataFrame(results)
-            st.success(f"Processed {len(results)} rows successfully!")
-            st.dataframe(results_df)
-            
-            csv = results_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Results as CSV",
-                data=csv,
-                file_name="extracted_addresses.csv",
-                mime="text/csv"
-            )
+            with col2:
+                json_str = json.dumps(data, indent=2, ensure_ascii=False)
+                st.download_button(
+                    label="📥 Download All Stations (JSON)",
+                    data=json_str,
+                    file_name="all_police_stations_india.json",
+                    mime="application/json"
+                )
+    else:
+        st.info("ℹ️ No data available. Please generate the database from Tab 3.")
 
 with tab3:
-    st.subheader("Generate Complete Districts Database")
+    st.subheader("🗺️ Generate Complete Police Station Database")
     st.info("""
-    This will fetch latitude, longitude, and address information for all 787+ districts in India.
+    This will search for police stations in all 787+ districts across India.
     
     ⚠️ **Important Notes:**
-    - This process will take approximately **20-30 minutes** due to API rate limits
-    - It will make ~787 API requests to OpenStreetMap Nominatim
+    - This process will take approximately **30-45 minutes** due to API rate limits
+    - It will make ~787 API requests to OpenStreetMap Overpass API
     - Please be patient and do not refresh the page
+    - Some districts may have limited data in OpenStreetMap
     """)
     
     col1, col2 = st.columns(2)
@@ -443,179 +310,187 @@ with tab3:
         total_districts = sum(len(districts) for districts in INDIA_DISTRICTS.values())
         st.metric("Total Districts", total_districts)
     
-    if st.button("🚀 Start Generating District Data", type="primary", key="generate_all"):
-        st.warning("⏳ This will take 20-30 minutes. Please don't close this window.")
+    if st.button("🚀 Start Generating Police Station Data", type="primary", key="generate_all"):
+        st.warning("⏳ This will take 30-45 minutes. Please don't close this window.")
         
         start_time = time.time()
-        all_districts_data = fetch_all_districts_data()
+        all_police_data = fetch_all_police_stations()
         end_time = time.time()
         
         elapsed_time = end_time - start_time
         st.success(f"✅ Completed in {elapsed_time/60:.1f} minutes!")
         
         # Store in session state
-        st.session_state['districts_data'] = all_districts_data
+        st.session_state['police_data'] = all_police_data
         
         # Display summary
         st.subheader("📊 Summary")
-        total_successful = 0
-        total_failed = 0
+        total_stations = 0
+        districts_with_data = 0
+        districts_without_data = 0
         
-        for state, districts in all_districts_data.items():
+        for state, districts in all_police_data.items():
             for district, data in districts.items():
-                if data.get('latitude') is not None:
-                    total_successful += 1
+                if data['total_found'] > 0:
+                    districts_with_data += 1
+                    total_stations += data['total_found']
                 else:
-                    total_failed += 1
+                    districts_without_data += 1
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("✅ Successful", total_successful)
+            st.metric("🚔 Total Police Stations", total_stations)
         with col2:
-            st.metric("❌ Failed", total_failed)
+            st.metric("✅ Districts with Data", districts_with_data)
         with col3:
-            success_rate = (total_successful / (total_successful + total_failed)) * 100
-            st.metric("Success Rate", f"{success_rate:.1f}%")
+            st.metric("❌ Districts without Data", districts_without_data)
+        with col4:
+            avg_per_district = total_stations / districts_with_data if districts_with_data > 0 else 0
+            st.metric("📊 Avg per District", f"{avg_per_district:.1f}")
+        
+        # Top districts
+        st.subheader("🏆 Top 10 Districts by Police Stations")
+        top_districts = []
+        for state, districts in all_police_data.items():
+            for district, data in districts.items():
+                if data['total_found'] > 0:
+                    top_districts.append({
+                        'State': state,
+                        'District': district,
+                        'Police Stations': data['total_found']
+                    })
+        
+        top_df = pd.DataFrame(top_districts).sort_values('Police Stations', ascending=False).head(10)
+        st.dataframe(top_df, use_container_width=True)
         
         # Preview data
-        st.subheader("📋 Data Preview")
-        
-        # Convert to flat list for preview
+        st.subheader("📋 Sample Data Preview")
         preview_data = []
-        for state, districts in all_districts_data.items():
-            for district, data in districts.items():
-                preview_data.append({
-                    'State': state,
-                    'District': district,
-                    'Latitude': data.get('latitude'),
-                    'Longitude': data.get('longitude'),
-                    'Display Name': data.get('display_name')
-                })
+        for state, districts in all_police_data.items():
+            for district, district_data in districts.items():
+                for station in district_data['police_stations'][:2]:  # First 2 from each
+                    preview_data.append({
+                        'State': state,
+                        'District': district,
+                        'Station Name': station['name'],
+                        'Address': station['address'],
+                        'Phone': station['phone'],
+                        'Latitude': station['latitude'],
+                        'Longitude': station['longitude']
+                    })
+                    if len(preview_data) >= 20:
+                        break
+                if len(preview_data) >= 20:
+                    break
+            if len(preview_data) >= 20:
+                break
         
         preview_df = pd.DataFrame(preview_data)
-        st.dataframe(preview_df.head(20), use_container_width=True)
+        st.dataframe(preview_df, use_container_width=True)
         
         # Download buttons
         st.subheader("💾 Download Options")
         
+        # Flatten data
+        flat_data = []
+        for state, districts in all_police_data.items():
+            for district, district_data in districts.items():
+                for station in district_data['police_stations']:
+                    flat_data.append({
+                        'State': state,
+                        'District': district,
+                        'Station_Name': station['name'],
+                        'Address': station['address'],
+                        'City': station['city'],
+                        'Phone': station['phone'],
+                        'Police_Type': station['police_type'],
+                        'Operator': station['operator'],
+                        'Latitude': station['latitude'],
+                        'Longitude': station['longitude']
+                    })
+        
+        flat_df = pd.DataFrame(flat_data)
+        
         col1, col2 = st.columns(2)
         
         with col1:
-            # JSON download
-            json_str = json.dumps(all_districts_data, indent=2, ensure_ascii=False)
-            st.download_button(
-                label="📥 Download as JSON",
-                data=json_str,
-                file_name="india_districts_complete_data.json",
-                mime="application/json",
-                key="download_json"
-            )
-        
-        with col2:
             # CSV download
-            csv_data = preview_df.to_csv(index=False)
+            csv_data = flat_df.to_csv(index=False)
             st.download_button(
-                label="📥 Download as CSV",
+                label="📥 Download as CSV (Flat)",
                 data=csv_data,
-                file_name="india_districts_complete_data.csv",
+                file_name="india_police_stations_complete.csv",
                 mime="text/csv",
                 key="download_csv"
             )
         
-        # Map visualization
-        st.subheader("🗺️ Map Visualization")
-        map_df = preview_df[preview_df['Latitude'].notna()][['Latitude', 'Longitude']].rename(
-            columns={'Latitude': 'lat', 'Longitude': 'lon'}
-        )
-        if not map_df.empty:
-            st.map(map_df, zoom=4)
-    
-    # If data exists in session state, show download buttons
-    if 'districts_data' in st.session_state:
-        st.divider()
-        st.subheader("💾 Download Previously Generated Data")
-        
-        all_districts_data = st.session_state['districts_data']
-        
-        # Preview
-        preview_data = []
-        for state, districts in all_districts_data.items():
-            for district, data in districts.items():
-                preview_data.append({
-                    'State': state,
-                    'District': district,
-                    'Latitude': data.get('latitude'),
-                    'Longitude': data.get('longitude'),
-                    'Display Name': data.get('display_name')
-                })
-        
-        preview_df = pd.DataFrame(preview_data)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            json_str = json.dumps(all_districts_data, indent=2, ensure_ascii=False)
-            st.download_button(
-                label="📥 Download JSON (Hierarchical)",
-                data=json_str,
-                file_name="india_districts_complete_data.json",
-                mime="application/json",
-                key="download_json_saved"
-            )
-        
         with col2:
-            csv_data = preview_df.to_csv(index=False)
+            # JSON download
+            json_str = json.dumps(all_police_data, indent=2, ensure_ascii=False)
             st.download_button(
-                label="📥 Download CSV (Flat)",
-                data=csv_data,
-                file_name="india_districts_complete_data.csv",
-                mime="text/csv",
-                key="download_csv_saved"
+                label="📥 Download as JSON (Hierarchical)",
+                data=json_str,
+                file_name="india_police_stations_complete.json",
+                mime="application/json",
+                key="download_json"
             )
+        
+        # Map visualization
+        st.subheader("🗺️ Map Visualization (Sample)")
+        if not flat_df.empty:
+            map_sample = flat_df.head(100)[['Latitude', 'Longitude']].rename(
+                columns={'Latitude': 'lat', 'Longitude': 'lon'}
+            )
+            st.map(map_sample, zoom=4)
+            st.caption("Showing first 100 police stations on map")
 
 # Sidebar
 with st.sidebar:
     st.header("ℹ️ Information")
     st.markdown("""
     ### Features:
-    - 🗺️ Uses OpenStreetMap Nominatim API
-    - 📍 Extracts district, state, pincode
-    - 📞 Finds phone numbers
-    - 🌍 Gets latitude & longitude
-    - 📊 Supports bulk CSV processing
-    - 💾 Generate complete districts database
+    - 🔍 Search police stations by district
+    - 🗺️ Uses OpenStreetMap Overpass API
+    - 📍 Get exact coordinates & addresses
+    - 📞 Contact information when available
+    - 📊 Generate complete database
+    - 💾 Export to CSV/JSON
     
-    ### Supported Districts:
+    ### Coverage:
     - All 787+ districts across India
-    - 36 States and UTs covered
+    - 36 States and Union Territories
     
-    ### Rate Limits:
-    - 1 request per second for Nominatim API
-    - Bulk operations may take time
-    
-    ### JSON Structure:
-    ```json
-    {
-      "State Name": {
-        "District Name": {
-          "district": "...",
-          "state": "...",
-          "latitude": 12.34,
-          "longitude": 56.78,
-          "display_name": "...",
-          "address": {...}
-        }
-      }
-    }
-    ```
+    ### Data Source:
+    - OpenStreetMap (OSM) database
+    - Community-contributed data
+    - May not be 100% complete
     
     ### Tips:
-    - Include district/state names for better results
-    - Add pincode if available
-    - More specific text = better geocoding
-    - Use Tab 3 to generate complete database
+    - Data availability varies by district
+    - Urban areas have better coverage
+    - You can contribute to OSM to improve data
+    
+    ### Rate Limits:
+    - 2 seconds between requests
+    - Bulk operations take time
+    - Please be patient
     """)
     
     st.markdown("---")
-    st.caption("Powered by OpenStreetMap Nominatim API")
+    
+    st.subheader("📊 Quick Stats")
+    if 'police_data' in st.session_state:
+        data = st.session_state['police_data']
+        total_stations = sum(
+            district_data['total_found'] 
+            for state_data in data.values() 
+            for district_data in state_data.values()
+        )
+        st.metric("🚔 Stations in Database", total_stations)
+    else:
+        st.info("No data loaded yet")
+    
+    st.markdown("---")
+    st.caption("Powered by OpenStreetMap Overpass API")
     st.caption("⚠️ Please respect API usage policies")
+    st.caption("Data © OpenStreetMap contributors")
